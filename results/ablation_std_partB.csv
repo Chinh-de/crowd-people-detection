@@ -1,0 +1,6 @@
+,MAE,MSE,GAME1,GAME2,GAME3,Đếm nhầm ở nền,IoU mask
+MobileCount (baseline),0.0,0.0,0.0,0.0,0.0,0.0,
+C1 mask,0.0,0.0,0.0,0.0,0.0,0.0,0.0
+C2 ASPP,0.0,0.0,0.0,0.0,0.0,0.0,
+C5 augmentation,0.0,0.0,0.0,0.0,0.0,0.0,
+C1+C5 mask + aug,0.0,0.0,0.0,0.0,0.0,0.0,0.0

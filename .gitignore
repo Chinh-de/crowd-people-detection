@@ -1,0 +1,23 @@
+# File nặng: không đưa lên git (giữ ở máy hoặc tải lại từ Kaggle)
+
+# Trọng số model (model.pth, results/, demo/models/)
+*.pth
+*.pt
+
+# Video, gồm video thử trong demo/data/videos/
+*.webm
+*.mp4
+*.mkv
+*.avi
+*.mov
+# (.ts video không ghi ở đây vì trùng đuôi file TypeScript; video nằm trong demo/data/ đã bị bỏ qua)
+
+# Dữ liệu phụ từ Kaggle: mẫu dự đoán, ảnh output tự xuất của notebook, ảnh minh họa > 5 MB
+results/*.npz
+results/__results___files/
+results/*_visual_partB.png
+
+# Notebook đã chạy có output nặng (> 30 MB); bản sạch ở baseline_/improved_/final_mobilecount.ipynb
+improve-mobilecount-tr-n-shanghaitech.ipynb
+improve-shanghai-baseline.ipynb
+shanghaitech-baseline.ipynb
