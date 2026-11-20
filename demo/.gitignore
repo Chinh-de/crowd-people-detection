@@ -1,4 +1,8 @@
-data/
+data/*
+# bộ ảnh + nhãn camera Temple Bar được đưa lên repo để duyệt nhãn chung
+!data/labels/
+data/labels/*
+!data/labels/dublin_live/
 backend/.venv/
 **/__pycache__/
 .pytest_cache/

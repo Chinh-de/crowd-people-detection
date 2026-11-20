@@ -18,6 +18,10 @@ dependencies = [
 
 [project.scripts]
 crowd-demo = "crowd_demo.main:run"
+crowd-grab = "crowd_demo.labeling.grab:run"
+crowd-autolabel = "crowd_demo.labeling.autolabel:run"
+crowd-label = "crowd_demo.labeling.server:run"
+crowd-label-stats = "crowd_demo.labeling.stats:run"
 
 [dependency-groups]
 dev = ["pytest>=8", "httpx>=0.27"]
