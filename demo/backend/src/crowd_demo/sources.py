@@ -1,6 +1,7 @@
 """Nguồn video: file có sẵn (phát đúng FPS gốc, lặp lại) và livestream YouTube."""
 import threading
 import time
+from collections import deque
 from pathlib import Path
 from typing import Protocol
 
@@ -129,12 +130,14 @@ def youtube_stream_url(url: str, max_height: int = 1080) -> tuple[str, str]:
 
 
 class YouTubeSource:
-    """Livestream HLS. Frame đến theo từng đợt (mỗi đoạn HLS vài giây), nên mốc thời gian lấy theo
-    nhịp video (n / fps) và frame được phát đều nhịp; nếu bị tụt lại quá xa (mạng chậm) thì đồng bộ lại."""
+    """Livestream HLS. Frame đến theo từng đợt (mỗi đoạn HLS vài giây), nên một luồng riêng giải mã frame vào
+    bộ đệm, còn read() phát frame đều nhịp FPS với độ trễ cố định BUFFER_S (jitter buffer). Nếu bộ đệm cạn
+    (mạng chậm) thì chờ đệm lại rồi đồng bộ nhịp phát; mất kết nối thì tự kết nối lại."""
 
     live = True
     MAX_RECONNECT = 5
-    MAX_LAG_S = 2.0
+    BUFFER_S = 3.0           # độ trễ phát so với lúc nhận, đủ che khoảng trống giữa hai đoạn HLS
+    MAX_BUFFER_S = 15.0      # đệm quá dài (máy xử lý chậm) thì bỏ frame cũ nhất
 
     def __init__(self, url: str, tz: str):
         self.url, self.tz = url, tz
@@ -143,19 +146,14 @@ class YouTubeSource:
         fps = self._cap.get(cv2.CAP_PROP_FPS)
         self.fps = fps if 1 <= fps <= 120 else 30.0
         self.size = (int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))
-        self._t0, self._n = time.time(), 0
-
-    def _clock(self) -> float:
-        """Mốc thời gian của frame vừa đọc, và chờ cho tới lúc phát frame đó."""
-        t = self._t0 + self._n / self.fps
-        self._n += 1
-        now = time.time()
-        if t > now:
-            time.sleep(t - now)
-        elif now - t > self.MAX_LAG_S:
-            self._t0, self._n = now, 1
-            t = now
-        return t
+        self._buf: deque[np.ndarray] = deque(maxlen=max(1, int(self.MAX_BUFFER_S * self.fps)))
+        self._cond = threading.Condition()
+        self._stop = threading.Event()
+        self._error: str | None = None
+        self._t0: float | None = None     # mốc phát frame số 0 của nhịp hiện tại
+        self._n = 0
+        self._pump = threading.Thread(target=self._pump_loop, name="hls-pump", daemon=True)
+        self._pump.start()
 
     @staticmethod
     def _open(stream: str) -> cv2.VideoCapture:
@@ -164,25 +162,76 @@ class YouTubeSource:
             raise SourceError("Không mở được luồng livestream.")
         return cap
 
-    def read(self) -> tuple[float, np.ndarray] | None:
-        for attempt in range(self.MAX_RECONNECT + 1):
+    def _pump_loop(self) -> None:
+        """Giải mã liên tục vào bộ đệm; tự kết nối lại khi mất luồng."""
+        fails = 0
+        while not self._stop.is_set():
             ok, frame = self._cap.read()
             if ok:
-                return self._clock(), frame
-            if attempt == self.MAX_RECONNECT:
-                break
+                fails = 0
+                with self._cond:
+                    self._buf.append(frame)
+                    self._cond.notify_all()
+                continue
+            fails += 1
+            if fails > self.MAX_RECONNECT:
+                with self._cond:
+                    self._error = f"Mất kết nối livestream sau {self.MAX_RECONNECT} lần thử lại."
+                    self._cond.notify_all()
+                return
             self._cap.release()
-            time.sleep(2)
+            if self._stop.wait(2):
+                return
             try:
                 self._cap = self._open(youtube_stream_url(self.url)[0])
             except SourceError:
                 continue
-        raise SourceError(f"Mất kết nối livestream sau {self.MAX_RECONNECT} lần thử lại.")
+
+    def _wait_for(self, n_frames: int) -> bool:
+        """Chờ tới khi bộ đệm có ít nhất n_frames frame; False nếu bị dừng hoặc luồng đã hỏng."""
+        with self._cond:
+            while len(self._buf) < n_frames:
+                if self._stop.is_set():
+                    return False
+                if self._error:
+                    if self._buf:
+                        return True
+                    raise SourceError(self._error)
+                self._cond.wait(0.2)
+        return True
+
+    def read(self) -> tuple[float, np.ndarray] | None:
+        if self._t0 is None or not self._buf:
+            # Lúc bắt đầu hoặc khi đệm cạn: đệm lại BUFFER_S rồi bắt đầu nhịp phát mới
+            if not self._wait_for(max(1, int(self.BUFFER_S * self.fps))):
+                return None
+            self._t0, self._n = time.time(), 0
+        due = int((time.time() - self._t0) * self.fps)   # frame lẽ ra đang được phát lúc này
+        skip = max(0, due - self._n)                    # người đọc (vẽ, nén) chậm hơn FPS: bỏ frame quá hạn
+        t = self._t0 + (self._n + skip) / self.fps
+        delay = t - time.time()
+        if delay > 0 and self._stop.wait(delay):
+            return None
+        with self._cond:
+            skip = min(skip, len(self._buf) - 1)
+            if skip < 0:
+                return None              # đệm cạn đúng lúc phát: lần read() sau sẽ đệm lại
+            for _ in range(skip):
+                self._buf.popleft()
+            self._n += skip
+            t = self._t0 + self._n / self.fps    # đệm ít hơn số frame cần bỏ thì mốc lùi lại tương ứng
+            frame = self._buf.popleft()
+        self._n += 1
+        return t, frame
 
     def interrupt(self) -> None:
-        """read() của livestream trả về sau tối đa một frame nên không cần làm gì thêm."""
+        self._stop.set()
+        with self._cond:
+            self._cond.notify_all()
 
     def close(self) -> None:
+        self.interrupt()
+        self._pump.join(timeout=5)
         self._cap.release()
 
 

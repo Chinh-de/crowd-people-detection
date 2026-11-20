@@ -4,6 +4,7 @@ Kiến trúc giống notebook train trên Kaggle, nên checkpoint `best_mc_*.pth
 """
 import math
 import os
+import time
 from pathlib import Path
 
 import cv2
@@ -91,6 +92,16 @@ def load_model(path: Path) -> CountModel:
                        aspp=any(k.startswith("deep.branches") for k in state))
     model.load_state_dict(state)
     return model.eval()
+
+
+def warmup(model: CountModel, analysis_width: int, runs: int = 2) -> float:
+    """Chạy thử trên frame 16:9 rỗng để PyTorch chuẩn bị sẵn kernel cho kích thước này.
+    Lần suy luận đầu tiên chậm hơn nhiều; nếu để tới lúc đang phát video mới chạy thì luồng video bị nghẽn."""
+    frame = np.zeros((round(analysis_width * 9 / 16), analysis_width, 3), np.uint8)
+    start = time.perf_counter()
+    for _ in range(runs):
+        infer(model, frame, analysis_width)
+    return time.perf_counter() - start
 
 
 def infer(model: CountModel, frame_bgr: np.ndarray, analysis_width: int) -> DensityResult:

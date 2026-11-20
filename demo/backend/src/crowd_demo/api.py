@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from .config import DEFAULT_MODEL, DEMO_DIR, MODELS, VIDEO_EXTS, VIEW_MODES, Settings
-from .model import CountModel, load_model
+from .model import CountModel, load_model, warmup
 from .pipeline import Pipeline
 from .rules import RuleConfig
 from .sources import SourceError
@@ -58,7 +58,13 @@ def create_app(settings: Settings | None = None, model: CountModel | None = None
     async def lifespan(app: FastAPI):
         for d in (settings.videos_dir, settings.zones_dir, settings.runs_dir):
             d.mkdir(parents=True, exist_ok=True)
-        app.state.models = {DEFAULT_MODEL: model or load_model(settings.model_path)}   # nạp model khác khi được chọn
+        # Nạp và chạy thử sẵn mọi model có file, để đổi model khi đang phát không làm video đứng hình
+        app.state.models = {DEFAULT_MODEL: model or load_model(settings.model_path)}
+        for name in MODELS:
+            if name not in app.state.models and settings.model_file(name).exists():
+                app.state.models[name] = load_model(settings.model_file(name))
+        for m in app.state.models.values():
+            warmup(m, settings.analysis_width)
         app.state.pipeline = Pipeline(settings, app.state.models[DEFAULT_MODEL], DEFAULT_MODEL)
         yield
         app.state.pipeline.stop()

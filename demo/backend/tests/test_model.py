@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from crowd_demo.config import Settings
-from crowd_demo.model import infer, load_model
+from crowd_demo.model import infer, load_model, warmup
 
 
 @pytest.fixture(scope="module")
@@ -26,3 +26,8 @@ def test_infer_shapes_and_count(model):
     assert r.mask is not None and r.mask.shape == r.density.shape
     assert abs(r.scale - 0.75) < 1e-6
     assert r.density.sum() < 5
+
+
+def test_warmup_runs_on_16_9_frame(model):
+    seconds = warmup(model, analysis_width=960)
+    assert seconds > 0

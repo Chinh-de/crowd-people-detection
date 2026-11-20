@@ -1,5 +1,6 @@
 import time
 
+import numpy as np
 import pytest
 
 from crowd_demo import sources
@@ -86,3 +87,57 @@ def test_youtube_source_reports_error_on_bad_url(monkeypatch):
     monkeypatch.setattr(sources, "youtube_stream_url", boom)
     with pytest.raises(SourceError, match="YouTube"):
         YouTubeSource("https://www.youtube.com/watch?v=invalid", "UTC")
+
+
+class _BurstCap:
+    """Giả lập HLS: mỗi đoạn trả 10 frame tức thì rồi chờ tải đoạn tiếp theo (tốc độ trung bình đúng FPS)."""
+
+    def __init__(self, fps=20.0, burst=10):
+        self.fps, self.burst, self.i = fps, burst, 0
+
+    def isOpened(self):
+        return True
+
+    def get(self, prop):
+        import cv2
+        return {cv2.CAP_PROP_FPS: self.fps, cv2.CAP_PROP_FRAME_WIDTH: 64, cv2.CAP_PROP_FRAME_HEIGHT: 48}.get(prop, 0)
+
+    def read(self):
+        if self.i and self.i % self.burst == 0:
+            time.sleep(self.burst / self.fps)
+        self.i += 1
+        return True, np.zeros((48, 64, 3), np.uint8)
+
+    def release(self):
+        pass
+
+
+def test_live_source_smooths_bursty_hls(monkeypatch):
+    """Frame về theo đợt (mỗi đoạn HLS) nhưng phải được phát đều, không đứng hình giữa hai đoạn."""
+    monkeypatch.setattr(sources, "youtube_stream_url", lambda url, max_height=1080: ("fake", "test"))
+    monkeypatch.setattr(YouTubeSource, "_open", staticmethod(lambda stream: _BurstCap()))
+    monkeypatch.setattr(YouTubeSource, "BUFFER_S", 1.0, raising=False)
+    s = YouTubeSource("https://youtube.test/live", "UTC")
+    s.read()                                                   # chờ đệm đầy
+    stamps = []
+    for _ in range(40):                                        # 2 giây = 4 đoạn HLS
+        s.read()
+        stamps.append(time.monotonic())
+    gaps = np.diff(stamps)
+    s.close()
+    assert gaps.max() < 0.12, f"đứng hình {gaps.max():.2f}s"
+
+
+def test_live_source_drops_frames_when_consumer_is_slow(monkeypatch):
+    """Máy vẽ/nén chậm hơn FPS nguồn: bỏ frame để bám thời gian thật, không tụt dần lại phía sau."""
+    monkeypatch.setattr(sources, "youtube_stream_url", lambda url, max_height=1080: ("fake", "test"))
+    monkeypatch.setattr(YouTubeSource, "_open", staticmethod(lambda stream: _BurstCap()))
+    monkeypatch.setattr(YouTubeSource, "BUFFER_S", 0.5)
+    s = YouTubeSource("https://youtube.test/live", "UTC")
+    s.read()
+    for _ in range(15):                                        # đọc 10 lần/giây trong khi nguồn 20 fps
+        t, _frame = s.read()
+        time.sleep(0.1)
+    lag = time.time() - t
+    s.close()
+    assert lag < 0.25, f"tụt lại {lag:.2f}s"

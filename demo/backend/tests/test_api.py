@@ -111,3 +111,9 @@ def test_list_and_switch_models(client):
     assert [m["name"] for m in s if m["active"]] == ["baseline"]
     assert next(m for m in s if m["name"] == "baseline")["has_mask"] is False
     assert client.put("/api/model", json={"name": "nope"}).status_code == 404
+
+
+def test_all_available_models_preloaded_at_startup(client):
+    """Đổi model khi đang chạy không phải nạp và chạy lần đầu (gây đứng hình): mọi model có file được nạp sẵn."""
+    available = {m["name"] for m in client.get("/api/models").json() if m["available"]}
+    assert set(client.app.state.models) == available
