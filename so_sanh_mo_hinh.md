@@ -58,32 +58,45 @@ Mask-aware Networks [7] cũng thêm một nhánh dự đoán mask có người /
 
 UMN gồm 11 đoạn video ở 3 bối cảnh. Mỗi đoạn có đám đông đi lại bình thường rồi đột ngột chạy tán loạn. Chỉ số so sánh là AUC tính theo từng khung hình.
 
-**Giao thức của đề tài** theo Marsden và cộng sự [18]. Với mỗi bối cảnh, 200 khung đầu của mỗi clip gộp lại làm tập train; mọi khung còn lại là tập test. Mỗi bối cảnh có một mô hình riêng.
+**Chuẩn so sánh chung.** Các bài trên UMN báo cáo AUC theo từng khung, tính riêng cho từng bối cảnh: 1 là bãi cỏ (1.453 khung), 2 là trong nhà (4.144 khung), 3 là quảng trường (2.142 khung). Nhiều bài báo cáo thêm AUC tổng. Mô hình chỉ train trên khung bình thường của chính bối cảnh đó; nhãn là nhãn gốc của video. Đề tài báo cáo theo đúng dạng này.
 
-| Phương pháp | Nơi công bố | AUC ↑ | Ghi chú |
+**Cách chia train của đề tài** theo Marsden và cộng sự [18]: với mỗi bối cảnh, 200 khung đầu của mỗi clip gộp lại làm tập train, mọi khung còn lại là tập test. Các bài khác dùng cùng chỉ số nhưng số khung train khác nhau, ví dụ 1000 khung mỗi bối cảnh [25] hoặc 760/1100/1000 khung [23]. Vì vậy chỉ [18] so được trực tiếp; các dòng khác dùng để định vị kết quả.
+
+| Phương pháp | Nơi công bố | AUC BC1 | AUC BC2 | AUC BC3 | AUC tổng | Khung train | Nguồn số liệu |
+|---|---|---|---|---|---|---|---|
+| Optical flow [14] | CVPR 2009 | – | – | – | 0,84 | khác | Bảng 1 của [24] |
+| Social Force [14] | CVPR 2009 | – | – | – | 0,96 | khác | Bảng 1 của [24] |
+| Chaotic invariants [20] | CVPR 2010 | – | – | – | 0,99 | khác | Bảng 1 của [24] |
+| Sparse reconstruction [15] | CVPR 2011 | 0,995 | 0,975 | 0,964 | – | khác | Bảng 1 của [24] |
+| Matrix approximation [21] | ICIP 2012 | 0,994 | 0,971 | 0,996 | – | khác | Bảng 1 của [24] |
+| Holistic + GMM [18] | ICIP 2016 | – | – | – | 0,929 | 200 khung đầu mỗi clip | **Cùng cách chia với đề tài** |
+| Object-centric AE [22] | CVPR 2019 | – | 0,991 | – | 0,996 | khác | bài gốc |
+| AED-Net [23] | 2019 | – | – | – | 0,997 | 760 / 1100 / 1000 | bài gốc |
+| Training-less [24] | 2019 | 0,988 | 0,978 | 0,984 | 0,982 | không train | bài gốc |
+| Scene perception [25] | – | 0,996 | 0,962 | 0,987 | 0,983 | 1000 mỗi bối cảnh | bài gốc |
+| **Đề tài · IF-flow·mask+density** | | **0,991** | **0,973** | **0,961** | **0,959** | 200 khung đầu mỗi clip | `anomaly_umn.ipynb` |
+
+Ghi chú:
+- Hầu hết các bài đạt 0,95–0,99, và bối cảnh 2 (trong nhà) thường thấp nhất [22].
+- Nhãn ảnh hưởng nhiều tới bối cảnh 2: một bài báo cáo AUC bối cảnh 2 là 78,4% với nhãn gốc và 95,6% với nhãn sửa tay [26]. Đề tài dùng nhãn gốc.
+- Số của Commotion Measure [16] (0,98), MDT [19] (0,995), Plug-and-Play CNN [17] (0,98) và [13] (0,99) chỉ có ở dạng AUC tổng do bài khác trích lại, nên không đưa vào bảng.
+
+**Kết quả của đề tài** (`anomaly_umn.ipynb`). Phương pháp tốt nhất là Isolation Forest trên flow trong mask người cộng mật độ người:
+- AUC trung bình 3 bối cảnh **0,975**, AUC tổng **0,959**, EER 8,2%.
+- **Vượt [18]** (0,929), bài duy nhất dùng cùng cách chia. Cũng vượt Optical flow (0,84) và ngang Social Force (0,96) [14].
+- Bối cảnh 2, khó nhất, đạt 0,973: cao hơn [25] (0,962) và [21] (0,971), xấp xỉ [15] (0,975) và [24] (0,978).
+- AUC trung bình thấp hơn các phương pháp tốt nhất khoảng 0,01 (0,978–0,987) và thấp hơn các bài gần mức trần (0,996–0,997 [22], [23]). Các bài này dùng nhiều khung train hơn.
+
+**Đóng góp của mô hình đếm (ablation, AUC trung bình 3 bối cảnh):**
+
+| Mô hình phát hiện | Chỉ flow | Flow trong mask | Thêm mật độ |
 |---|---|---|---|
-| Đặc trưng holistic + GMM [18] | ICIP 2016 | 0,929 | **Cùng giao thức với đề tài** |
-| Social Force [14] | CVPR 2009 | 0,97 | Do [18] trích lại |
-| Commotion Measure [16] | ICIP 2015 | 0,98 | Do [18] trích lại |
-| MDT [19] | CVPR 2010 | 0,995 | Do [18] trích lại |
+| Isolation Forest | 0,891 | 0,891 | **0,975** (+0,084) |
+| Autoencoder | 0,922 | **0,943** (+0,021) | 0,936 (+0,014) |
 
-Bảng tham khảo thêm, lấy theo Bảng 2 của [13]. Các số này có thể dùng giao thức khác:
-
-| Phương pháp | Nơi công bố | AUC ↑ |
-|---|---|---|
-| Optical flow [14] | CVPR 2009 | 0,84 |
-| Social Force [14] | CVPR 2009 | 0,96 |
-| Sparse Reconstruction [15] | CVPR 2011 | 0,97 |
-| Commotion Measure [16] | ICIP 2015 | 0,98 |
-| Plug-and-Play CNN (TCP) [17] | WACV 2018 | 0,98 |
-| Adversarial Discriminator [13] | WACV 2019 | 0,99 |
-
-**Mục tiêu của đề tài.** Autoencoder học mẫu chuyển động bình thường từ các đặc trưng theo lưới: optical flow lấy trong mask người, cộng với mật độ từ MobileCount + Mask. Notebook: `anomaly_umn.ipynb`. Mục tiêu:
-- **vượt** [18] (0,929), bài dùng cùng giao thức và cũng dựa trên đặc trưng tốc độ và mật độ;
-- **tiệm cận** khoảng 0,97–0,98 (Social Force, Commotion Measure);
-- **vượt** luật đặt tay của demo.
-
-Phần ablation "chỉ dùng flow" so với "flow + mật độ" sẽ cho thấy mô hình đếm có đóng góp cho bài toán phát hiện bất thường.
+- Thêm số người vào 4 đặc trưng toàn khung: 0,926 → 0,956 (+0,030).
+- Mật độ giúp nhiều nhất ở bối cảnh 2: Isolation Forest từ 0,749 lên 0,973.
+- Số người là đặc trưng đơn lẻ tách bình thường và bất thường rõ nhất: số người giảm mạnh khi đám đông bỏ chạy khỏi khung hình. Đây cũng là giới hạn cần ghi: trên camera thật, cảnh vắng người không phải lúc nào cũng là bất thường.
 
 ## 5. Tài liệu tham khảo
 
@@ -106,3 +119,10 @@ Phần ablation "chỉ dùng flow" so với "flow + mật độ" sẽ cho thấy
 17. M. Ravanbakhsh, M. Nabi, H. Mousavi, E. Sangineto, N. Sebe. *Plug-and-Play CNN for Crowd Motion Analysis: An Application in Abnormal Event Detection.* WACV 2018.
 18. M. Marsden, K. McGuinness, S. Little, N. E. O'Connor. *Holistic Features for Real-Time Crowd Behaviour Anomaly Detection.* ICIP 2016. arXiv:1606.05310.
 19. V. Mahadevan, W. Li, V. Bhalodia, N. Vasconcelos. *Anomaly Detection in Crowded Scenes.* CVPR 2010.
+20. S. Wu, B. E. Moore, M. Shah. *Chaotic Invariants of Lagrangian Particle Trajectories for Anomaly Detection in Crowded Scenes.* CVPR 2010.
+21. L. Wang, M. Dong. *Real-time Detection of Abnormal Crowd Behavior using a Matrix Approximation-based Approach.* ICIP 2012.
+22. R. T. Ionescu, F. S. Khan, M.-I. Georgescu, L. Shao. *Object-centric Auto-encoders and Dummy Anomalies for Abnormal Event Detection in Video.* CVPR 2019. arXiv:1812.04960.
+23. T. Wang, Z. Miao, Y. Chen, Y. Zhou, G. Shan, H. Snoussi. *AED-Net: An Abnormal Event Detection Network.* arXiv:1903.11891, 2019.
+24. A. Sikdar, A. S. Chowdhury. *An Adaptive Training-less System for Anomaly Detection in Crowd Scenes.* arXiv:1906.00705, 2019.
+25. X. Zhang, D. Ma, H. Yu, Y. Huang, P. Howell, B. Stevens. *Scene Perception Guided Crowd Anomaly Detection.* Bản tác giả, University of Portsmouth.
+26. Patil và cộng sự. *Global Abnormal Events Detection in Crowded Scenes using Context Location and Motion-rich Spatio-temporal Volumes.* IET Image Processing, 2018.
