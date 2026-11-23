@@ -3,7 +3,7 @@ import numpy as np
 
 from crowd_demo.domain import Alert
 from crowd_demo.evidence import EvidenceRecorder, FrameRing, write_clip
-from crowd_demo.storage import Store
+from crowd_demo.storage import Database
 
 
 def frame(i, w=64, h=48):
@@ -24,7 +24,7 @@ def test_write_clip_is_h264_mp4(tmp_path):
 
 def test_recorder_writes_clip_after_post_window(tmp_path):
     ring = FrameRing(seconds=20, fps_cap=10)
-    store = Store(tmp_path / "db.sqlite")
+    store = Database(tmp_path / "db.sqlite").store(1)
     rec = EvidenceRecorder(ring, store, tmp_path / "ev", pre_s=5, post_s=5)
     for i in range(0, 121):                        # 0..12 s, 10 frame/s
         t = i / 10

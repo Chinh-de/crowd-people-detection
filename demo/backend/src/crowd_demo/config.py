@@ -17,6 +17,8 @@ MODELS = {
     "baseline": ("MobileCount (baseline)", "baseline.pth"),
 }
 DEFAULT_MODEL = "mask"
+# Kết quả nghiên cứu giai đoạn 1 (MAE, MSE trên tập test ShanghaiTech Part B), hiển thị trên web để so sánh
+MODEL_METRICS = {"mask": (8.49, 13.77), "baseline": (9.30, 15.47)}
 
 
 @dataclass
@@ -33,6 +35,10 @@ class Settings:
     stream_width: int = 960        # chiều rộng luồng MJPEG gửi lên web
     jpeg_quality: int = 80
     calib_seconds: float = 300.0   # thời gian học mức bình thường mặc định (5 phút)
+    # Giới hạn phần cứng: mỗi camera tốn một luồng phân tích trên CPU
+    max_cameras: int = field(default_factory=lambda: int(os.environ.get("CROWD_MAX_CAMERAS", "4")))
+    raw_days: float = field(default_factory=lambda: float(os.environ.get("CROWD_RAW_DAYS", "3")))
+    clip_days: float = field(default_factory=lambda: float(os.environ.get("CROWD_CLIP_DAYS", "30")))
 
     def model_file(self, name: str) -> Path:
         return self.models_dir / MODELS[name][1]
@@ -48,6 +54,14 @@ class Settings:
     @property
     def zones_dir(self) -> Path:
         return self.data_dir / "zones"
+
+    @property
+    def db_path(self) -> Path:
+        return self.data_dir / "crowd.db"
+
+    @property
+    def evidence_dir(self) -> Path:
+        return self.data_dir / "evidence"
 
     @property
     def runs_dir(self) -> Path:

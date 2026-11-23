@@ -2,10 +2,20 @@ import type { RuleName } from './types'
 
 export const RULE_LABELS: Record<RuleName, string> = {
   overcrowd: 'Quá đông',
+  zone_limit: 'Vượt sức chứa vùng',
   hot_cell: 'Ô quá dày',
   surge: 'Tăng đột ngột',
-  panic: 'Hỗn loạn',
+  panic: 'Bất thường chuyển động',
   counterflow: 'Ngược chiều',
+}
+
+export const RULE_HINTS: Record<RuleName, string> = {
+  overcrowd: 'Số người trong vùng theo dõi vượt mức thường ngày, hoặc vượt sức chứa tối đa đã đặt.',
+  zone_limit: 'Một vùng có tên vượt sức chứa riêng do người vận hành đặt. Áp dụng ngay, không cần học.',
+  hot_cell: 'Một ô 64×64 px chứa quá nhiều người: điểm tụ tập cục bộ.',
+  surge: 'Số người tăng nhanh trong một phút: đám đông đổ về.',
+  panic: 'Điểm của mô hình phát hiện bất thường (giai đoạn 2) vượt ngưỡng học từ chính camera.',
+  counterflow: 'Một phần lớn chuyển động đi ngược hướng chính.',
 }
 
 export const TIMEZONES = [
@@ -33,4 +43,6 @@ export function duration(sec: number): string {
   return `${m}:${String(s).padStart(2, '0')}`
 }
 
-export const num = (v: number | null | undefined, digits = 0) => (v == null ? '–' : v.toFixed(digits))
+/** Số theo kiểu Việt Nam (dấu phẩy thập phân). */
+export const num = (v: number | null | undefined, digits = 0) =>
+  v == null || !Number.isFinite(v) ? '–' : v.toLocaleString('vi-VN', { minimumFractionDigits: digits, maximumFractionDigits: digits })

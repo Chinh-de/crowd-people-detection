@@ -65,12 +65,32 @@ def test_surge_detected_on_fast_rise():
     assert surge and surge[0] <= 10         # làm mượt 3 mẫu + duy trì 6 s: phát hiện trong ~20 s
 
 
-def test_panic_requires_speed_and_entropy():
-    e = calibrated()
-    only_speed = feed(e, [60.0] * 5, t0=200, speeds=[40.0] * 5)
-    assert all(a.rule != "panic" for a in only_speed)
-    both = feed(e, [60.0] * 5, t0=220, speeds=[40.0] * 5, entropies=[0.95] * 5)
-    assert any(a.rule == "panic" for a in both)
+def test_panic_uses_anomaly_model_score_with_short_persistence():
+    from crowd_demo.anomaly import Reading
+    e = calibrated(cfg=RuleConfig(panic_persist_s=2))
+    m = MotionStats(speed=10, entropy=0.5, counterflow=0.1, active_ratio=0.3)
+    calm = [a for i in range(5) for a in e.update(200 + i, stats(60), m, Reading(0.4, 0.6, None))]
+    assert calm == []
+    burst = [a.rule for i in range(4) for a in e.update(210 + i, stats(60), m, Reading(0.9, 0.6, None))]
+    assert burst == ["panic"]                       # vượt ngưỡng liên tục 2 s thì báo
+    assert e.thresholds()["panic_score"] == 0.6
+
+
+def test_panic_fires_even_when_people_have_left_the_frame():
+    """Trên UMN, lúc hoảng loạn mọi người chạy khỏi khung hình: mask gần như trống nhưng vẫn phải báo."""
+    from crowd_demo.anomaly import Reading
+    e = calibrated(cfg=RuleConfig(panic_persist_s=0))
+    empty = MotionStats(active_ratio=0.0)
+    assert [a.rule for a in e.update(200, stats(1), empty, Reading(0.9, 0.6, None)) if a.rule == "panic"] == ["panic"]
+
+
+def test_zone_limit_alert_names_the_zone():
+    from crowd_demo.domain import ZoneCount
+    e = RuleEngine(RuleConfig(persist_s=0, smooth=1))
+    d = stats(40)
+    d.zones = [ZoneCount("Cổng A", 35.0, 30.0), ZoneCount("Cổng B", 10.0, 30.0), ZoneCount("Sảnh", 99.0, None)]
+    alerts = e.update(0.0, d, MotionStats())
+    assert [a.rule for a in alerts] == ["zone_limit"] and "Cổng A" in alerts[0].message and "Sảnh" not in alerts[0].message
 
 
 def test_counterflow_alert():

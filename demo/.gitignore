@@ -8,3 +8,9 @@ backend/.venv/
 .pytest_cache/
 frontend/node_modules/
 frontend/dist/
+
+# Trọng số và thống kê chuẩn hóa của model (chép từ output Kaggle, không đưa lên git)
+models/
+
+# Tài khoản và khóa bí mật
+backend/.env

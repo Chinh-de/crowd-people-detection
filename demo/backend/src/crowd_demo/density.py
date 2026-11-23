@@ -3,7 +3,7 @@ import math
 
 import numpy as np
 
-from .domain import DensityStats
+from .domain import DensityStats, ZoneCount
 from .zones import ZoneSet
 
 
@@ -19,6 +19,8 @@ def analyze_density(den: np.ndarray, zones: ZoneSet, cell: int, cell_limit: floa
     z = zones.masks(*den.shape)
     cells = cell_sums(np.where(z["watch"], den, 0.0), max(1, cell))
     hot = [] if cell_limit is None else [(int(r), int(c)) for r, c in zip(*np.nonzero(cells > cell_limit))]
+    per_zone = [ZoneCount(zones.meta(i)["name"], float(den[m].sum()), zones.meta(i)["limit"])
+                for i, m in enumerate(zones.zone_masks(*den.shape))]
     return DensityStats(total=float(den.sum()), roi=float(den[z["watch"]].sum()),
                         excluded=float(den[z["exclude"]].sum()), cells=cells,
-                        hot_cells=hot, max_cell=float(cells.max()) if cells.size else 0.0)
+                        hot_cells=hot, max_cell=float(cells.max()) if cells.size else 0.0, zones=per_zone)

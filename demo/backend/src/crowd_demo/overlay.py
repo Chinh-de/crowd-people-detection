@@ -15,6 +15,7 @@ ROI_COLOR = (80, 220, 80)          # BGR
 EXCLUDE_COLOR = (60, 60, 230)
 MASK_COLOR = (0, 215, 255)
 HOT_COLOR = (40, 40, 255)
+ANOMALY_COLOR = (0, 140, 255)      # cam: ô có sai số dựng lại vượt ngưỡng (autoencoder)
 ARROW_COLOR = (255, 255, 255)
 ARROW_STEP = 24                    # khoảng cách lưới mũi tên flow, pixel ảnh đầu ra
 HEAT_MAX_ALPHA = 0.6
@@ -32,6 +33,8 @@ class Layers:
     cell_frac: tuple[float, float] = (0.0, 0.0)  # kích thước một ô lưới, tỉ lệ theo (rộng, cao) khung
     alert_active: bool = False
     heat_vmax: float = 0.05
+    anomaly_cells: np.ndarray | None = None      # (8, 8) mức bất thường theo ô
+    anomaly_limit: float | None = None
     _painted: dict = field(default_factory=dict, repr=False, compare=False)
 
 
@@ -80,6 +83,7 @@ def _paint(layers: Layers, h: int, w: int) -> _Paint:
         _draw_mask(lines, layers.mask)
         _draw_flow(lines, layers)
         _draw_hot_cells(lines, layers)
+        _draw_anomaly_cells(lines, layers)
         exclude = layers.zones.masks(h, w)["exclude"] if layers.zones.exclude else None
         layers._painted[key] = _Paint(heat, alpha, exclude, lines, lines.any(axis=2))
     return layers._painted[key]
@@ -135,3 +139,15 @@ def _draw_hot_cells(img: np.ndarray, layers: Layers) -> None:
     cw, ch = layers.cell_frac[0] * w, layers.cell_frac[1] * h
     for r, c in layers.hot_cells:
         cv2.rectangle(img, (int(c * cw), int(r * ch)), (int((c + 1) * cw), int((r + 1) * ch)), HOT_COLOR, 2)
+
+
+def _draw_anomaly_cells(img: np.ndarray, layers: Layers) -> None:
+    """Ô lưới 8×8 có sai số dựng lại vượt ngưỡng: vị trí bất thường do autoencoder chỉ ra."""
+    if layers.anomaly_cells is None or not layers.anomaly_limit:
+        return
+    h, w = img.shape[:2]
+    gh, gw = layers.anomaly_cells.shape
+    ys = np.linspace(0, h, gh + 1).astype(int)
+    xs = np.linspace(0, w, gw + 1).astype(int)
+    for r, c in zip(*np.nonzero(layers.anomaly_cells > layers.anomaly_limit)):
+        cv2.rectangle(img, (int(xs[c]) + 2, int(ys[r]) + 2), (int(xs[c + 1]) - 3, int(ys[r + 1]) - 3), ANOMALY_COLOR, 2)
