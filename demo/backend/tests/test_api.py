@@ -121,7 +121,7 @@ def test_status_ws_stream_and_snapshot(client):
 def test_zones_rules_models_saved_per_camera(client):
     cid = started(client)
     body = {**ROI, "roi_meta": [{"name": "Cổng A", "limit": 25}]}
-    assert client.put(f"/api/cameras/{cid}/zones", json=body).json()["roi_meta"] == [{"name": "Cổng A", "limit": 25.0}]
+    assert client.put(f"/api/cameras/{cid}/zones", json=body).json()["roi_meta"] == [{"name": "Cổng A", "limit": 25.0, "direction": None}]
     assert client.put(f"/api/cameras/{cid}/zones", json={**ROI, "roi_meta": [{"limit": -3}]}).status_code == 422
     assert client.put(f"/api/cameras/{cid}/rules", json={"cooldown_s": 5}).json()["cooldown_s"] == 5
     assert client.put(f"/api/cameras/{cid}/anomaly-model", json={"name": "speed"}).json()["model"] == "speed"
@@ -138,31 +138,31 @@ def test_models_listing(client):
     models = {m["name"]: m for m in client.get("/api/models").json()}
     assert models["mask"]["available"] and models["mask"]["has_mask"] and models["mask"]["mae"] == 8.49
     names = [m["name"] for m in client.get("/api/anomaly-models").json()["models"]]
-    assert names[:4] == ["speed", "if_flow", "if_flow_mask", "if_flow_mask_density"]
+    assert names[:2] == ["speed", "if_flow_mask_density"] and [n for n in names if n.startswith("if_")] == ["if_flow_mask_density"]
 
 
 # ---------------------------------------------------------------- lịch sử và thống kê
 def test_events_history_ack_csv_context_and_stats(client):
     cid = started(client)
-    assert client.put(f"/api/cameras/{cid}/rules", json={"count_limit": -1.0, "persist_s": 0}).status_code == 200
+    assert client.put(f"/api/cameras/{cid}/rules", json={"count_limit": -1.0, "persist_s": 0, "smooth": 1}).status_code == 200
     rows = []
     end = time.time() + 15
     while time.time() < end and not rows:
         rows = client.get(f"/api/events?camera_id={cid}").json()["rows"]
         time.sleep(0.3)
-    assert rows and rows[0]["rule"] == "overcrowd" and rows[0]["status"] == "new"
+    assert rows and rows[0]["rule"] == "zone_limit" and rows[0]["status"] == "new"
     assert client.get(rows[0]["snapshot"]).status_code == 200
     assert client.get("/api/system").json()["unacked"] >= 1
     acked = client.post(f"/api/events/{rows[0]['id']}/ack", json={"note": "đã kiểm tra"}).json()
     assert acked["status"] == "ack" and acked["ack_by"] == "qt"
     assert client.get("/api/events?status=ack").json()["total"] == 1
     csv_text = client.get(f"/api/events.csv?camera_id={cid}").content.decode("utf-8-sig")
-    assert csv_text.startswith("id,t,camera_id") and "overcrowd" in csv_text
+    assert csv_text.startswith("id,t,camera_id") and "zone_limit" in csv_text
     ctx = client.get(f"/api/events/{rows[0]['id']}/context").json()
     assert ctx["event"]["id"] == rows[0]["id"] and ctx["series"]
     now = time.time()
     st = client.get(f"/api/stats?camera_id={cid}&t0={now - 3600}&t1={now + 60}").json()
-    assert st["bucket"] == 60 and st["series"] and st["summary"]["events"].get("overcrowd")
+    assert st["bucket"] == 60 and st["series"] and st["summary"]["events"].get("zone_limit")
     assert st["heatmap"] and st["events_by_day"]
     assert client.get(f"/api/stats?t0={now}&t1={now - 1}").status_code == 422
 

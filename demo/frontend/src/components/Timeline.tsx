@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { CartesianGrid, Line, LineChart, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { AXIS, GRID, SERIES, TOOLTIP } from '../charts'
 import { RULE_LABELS, clock, num } from '../format'
@@ -60,21 +61,38 @@ export function SeriesCharts({ series, events, tz, limit, height = 90 }: {
   )
 }
 
-/** Diễn biến 10 phút gần nhất của camera đang xem. */
+const OPEN_KEY = 'crowd.timeline'
+function readOpen(): boolean {
+  try {
+    return localStorage.getItem(OPEN_KEY) !== '0'
+  } catch {
+    return true
+  }
+}
+
+/** Diễn biến 10 phút gần nhất của camera đang xem; thu gọn được để video cao hơn. */
 export function Timeline({ series, events, tz, limit }: {
   series: SeriesRow[]; events: EventRow[]; tz: string; limit: number | null
 }) {
   const last = series[series.length - 1]
+  const [open, setOpen] = useState(() => readOpen())
+  const toggle = () => {
+    setOpen(!open)
+    try {
+      localStorage.setItem(OPEN_KEY, open ? '0' : '1')
+    } catch { /* trình duyệt chặn lưu trữ: chỉ không nhớ lựa chọn */ }
+  }
   return (
     <section className="card timeline" aria-labelledby="tl-title">
       <header className="card-head">
         <h2 id="tl-title"><Icon name="chart" /> Diễn biến 10 phút</h2>
-        <span className="muted small">
+        <span className="muted small spacer">
           {last ? `hiện ${num(last.roi)} người · điểm ${num(last.anomaly, 3)}` : ''}
         </span>
+        <button className="btn btn-ghost btn-sm" onClick={toggle} aria-expanded={open}>{open ? 'Thu gọn' : 'Mở biểu đồ'}</button>
       </header>
-      {series.length < 2 ? <p className="muted small center">Đang chờ dữ liệu…</p>
-        : <SeriesCharts series={series} events={events} tz={tz} limit={limit} height={window.innerHeight < 900 ? 58 : 84} />}
+      {!open ? null : series.length < 2 ? <p className="muted small center">Đang chờ dữ liệu…</p>
+        : <SeriesCharts series={series} events={events} tz={tz} limit={limit} height={window.innerHeight < 900 ? 48 : 84} />}
     </section>
   )
 }

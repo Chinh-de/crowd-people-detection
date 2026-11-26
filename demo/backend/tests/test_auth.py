@@ -9,7 +9,6 @@ def test_check_credentials_and_roles():
     assert a.check("quantri", "mk-dai-123").role == "admin"
     assert a.check("vanhanh", "xem-456").role == "viewer"
     assert a.check("quantri", "sai") is None and a.check("ai_do", "mk-dai-123") is None
-    assert not a.using_default
 
 
 def test_token_roundtrip_expiry_and_tamper():
@@ -25,5 +24,18 @@ def test_token_roundtrip_expiry_and_tamper():
 
 def test_defaults_when_env_missing():
     a = Auth({})
-    assert a.using_default and a.check("admin", "admin").role == "admin"
+    assert a.check("admin", "admin").role == "admin"
     assert a.check("viewer", "") is None                             # không khai báo thì không có tài khoản chỉ xem
+
+
+def test_seeded_into_db_and_hashed(tmp_path):
+    from crowd_demo.storage import Database
+    db = Database(tmp_path / "t.db")
+    a = Auth({})
+    a.attach(db)
+    row = db.get_user("admin")
+    assert row["role"] == "admin" and "admin" not in (row["hash"], row["salt"])
+    assert a.check("admin", "admin").role == "admin" and a.check("admin", "sai") is None
+    assert a.check("ai_do", "x") is None
+    Auth({"CROWD_ADMIN_USER": "admin", "CROWD_ADMIN_PASSWORD": "khac"}).attach(db)   # khởi động lại không ghi đè
+    assert a.check("admin", "admin") is not None

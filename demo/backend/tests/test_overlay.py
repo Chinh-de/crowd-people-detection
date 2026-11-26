@@ -18,7 +18,7 @@ def test_all_modes_shape(frame, mode):
     layers = Layers(density=np.random.default_rng(1).random((60, 80)) * 0.05,
                     mask=np.ones((60, 80)), flow=np.ones((60, 80, 2), np.float32),
                     zones=ZoneSet([[(0.1, 0.1), (0.9, 0.1), (0.9, 0.9)]], []),
-                    hot_cells=[(0, 0)], cell_frac=(0.2, 0.2), alert_active=True)
+                    wrong=np.ones((60, 80), bool), alert_active=True)
     out = render(frame, layers, mode, 160)
     assert out.shape == (120, 160, 3) and out.dtype == np.uint8
 

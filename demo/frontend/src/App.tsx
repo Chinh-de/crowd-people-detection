@@ -5,6 +5,7 @@ import { useLive } from './hooks/useLiveStatus'
 import { AuditPage } from './pages/AuditPage'
 import { CamerasPage } from './pages/CamerasPage'
 import { HistoryPage } from './pages/HistoryPage'
+import { LabelingPage } from './pages/LabelingPage'
 import { LoginPage } from './pages/LoginPage'
 import { MonitorPage } from './pages/MonitorPage'
 import { StatsPage } from './pages/StatsPage'
@@ -51,7 +52,8 @@ export default function App() {
   const isAdmin = me.role === 'admin'
   const page = route === 'cameras' && isAdmin ? <CamerasPage cameras={cameras} live={live} onChanged={loadCameras} />
     : route === 'audit' && isAdmin ? <AuditPage />
-    : route === 'history' ? <HistoryPage cameras={cameras} unacked={live?.unacked ?? 0} />
+    : route === 'labeling' && isAdmin ? <LabelingPage />
+    : route === 'history' ? <HistoryPage cameras={cameras} unacked={live?.unacked ?? 0} canJudge={isAdmin} />
     : route === 'stats' ? <StatsPage cameras={cameras} />
     : <MonitorPage me={me} live={live} cameras={cameras} onCamerasChanged={loadCameras} />
 

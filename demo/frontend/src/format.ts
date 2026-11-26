@@ -1,22 +1,30 @@
-import type { RuleName } from './types'
+import type { AnomalyStatus, RuleName } from './types'
 
+/** Nhãn mọi loại cảnh báo. Hai loại "(cũ)" đã bỏ, chỉ còn để xem lịch sử. */
 export const RULE_LABELS: Record<RuleName, string> = {
-  overcrowd: 'Quá đông',
-  zone_limit: 'Vượt sức chứa vùng',
-  hot_cell: 'Ô quá dày',
-  surge: 'Tăng đột ngột',
   panic: 'Bất thường chuyển động',
-  counterflow: 'Ngược chiều',
+  zone_limit: 'Vượt sức chứa',
+  surge: 'Tăng đột ngột',
+  counterflow: 'Đi ngược chiều',
+  overcrowd: 'Quá đông (cũ)',
+  hot_cell: 'Ô quá dày (cũ)',
 }
 
-export const RULE_HINTS: Record<RuleName, string> = {
-  overcrowd: 'Số người trong vùng theo dõi vượt mức thường ngày, hoặc vượt sức chứa tối đa đã đặt.',
-  zone_limit: 'Một vùng có tên vượt sức chứa riêng do người vận hành đặt. Áp dụng ngay, không cần học.',
-  hot_cell: 'Một ô 64×64 px chứa quá nhiều người: điểm tụ tập cục bộ.',
-  surge: 'Số người tăng nhanh trong một phút: đám đông đổ về.',
-  panic: 'Điểm của mô hình phát hiện bất thường (giai đoạn 2) vượt ngưỡng học từ chính camera.',
-  counterflow: 'Một phần lớn chuyển động đi ngược hướng chính.',
+/** Trạng thái phát hiện bất thường bằng chữ, thay cho con số điểm khó hiểu. */
+export function anomalyState(a: AnomalyStatus): { key: 'learning' | 'none' | 'normal' | 'abnormal'; label: string } {
+  if (a.learning) return { key: 'learning', label: `Đang học ${a.have}/${a.need}` }
+  if (a.limit == null || a.score == null) return { key: 'none', label: 'Chưa học' }
+  return a.score > a.limit ? { key: 'abnormal', label: 'Bất thường' } : { key: 'normal', label: 'Bình thường' }
 }
+
+/** Hướng đi cho phép của vùng, theo hướng nhìn trên màn hình (độ: 0 = sang phải, 90 = xuống). */
+export const DIRECTIONS = [
+  { value: 0, label: '→ sang phải' }, { value: 45, label: '↘ xuống phải' }, { value: 90, label: '↓ đi xuống' },
+  { value: 135, label: '↙ xuống trái' }, { value: 180, label: '← sang trái' }, { value: 225, label: '↖ lên trái' },
+  { value: 270, label: '↑ đi lên' }, { value: 315, label: '↗ lên phải' },
+]
+
+export const VERDICT_LABELS = { true: 'Đúng', false: 'Báo nhầm' } as const
 
 export const TIMEZONES = [
   { value: 'Europe/Dublin', label: 'Dublin' },

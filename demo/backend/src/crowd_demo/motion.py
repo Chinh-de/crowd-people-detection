@@ -5,7 +5,8 @@ import numpy as np
 from .domain import MotionStats
 
 N_BINS = 16              # số ngăn hướng (la bàn 16 hướng) để tính entropy
-COUNTER_ANGLE = 120.0    # lệch hơn góc này so với hướng chính = ngược chiều
+COUNTER_ANGLE = 120.0    # lệch hơn góc này so với hướng đang xét = ngược chiều
+MIN_MOVING_PX = 40       # vùng có ít điểm ảnh flow chuyển động hơn mức này thì không kết luận (nhiễu)
 
 
 def compute_flow(prev_bgr: np.ndarray, cur_bgr: np.ndarray, width: int) -> np.ndarray:
@@ -42,3 +43,19 @@ def flow_features(flow: np.ndarray, valid: np.ndarray | None, dt: float, min_mag
     return MotionStats(speed=float(m.mean() / max(dt, 1e-6)), direction_deg=float(np.degrees(main)),
                        entropy=entropy, counterflow=counterflow,
                        active_ratio=float(moving.sum() / max(n_valid, 1)))
+
+
+def wrong_way(flow: np.ndarray, area: np.ndarray, allowed_deg: float,
+              min_mag: float = 0.5) -> tuple[float | None, np.ndarray]:
+    """Phần chuyển động (theo độ lớn) trong `area` đi ngược chiều cho phép, và mask các điểm đi ngược.
+
+    `allowed_deg`: 0 = sang phải, 90 = xuống dưới (trục ảnh). Trả None nếu quá ít chuyển động để xét.
+    """
+    dx, dy = flow[..., 0], flow[..., 1]
+    mag = np.hypot(dx, dy)
+    moving = area & (mag >= min_mag)
+    if moving.sum() < MIN_MOVING_PX:
+        return None, np.zeros(area.shape, bool)
+    diff = np.abs(np.angle(np.exp(1j * (np.arctan2(dy, dx) - np.radians(allowed_deg)))))
+    wrong = moving & (diff > np.radians(COUNTER_ANGLE))
+    return float(mag[wrong].sum() / mag[moving].sum()), wrong

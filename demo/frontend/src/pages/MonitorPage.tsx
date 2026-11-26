@@ -1,8 +1,10 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from '../api'
 import { CameraStrip } from '../components/CameraStrip'
+import { Icon } from '../components/Icon'
 import { AlertsCard, KpiCard, ZonesCard } from '../components/LivePanels'
 import { PipelineCard } from '../components/PipelineCard'
+import { QuickAddCard } from '../components/QuickAddCard'
 import { RulesCard } from '../components/RulesCard'
 import { Timeline } from '../components/Timeline'
 import { VideoPanel, type ZoneTool } from '../components/VideoPanel'
@@ -12,6 +14,10 @@ const SERIES_MINUTES = 10
 const CLIP_POLL_MS = 2000
 const EMPTY_ZONES: ZoneSet = { roi: [], exclude: [], roi_meta: [] }
 const STORE_KEY = 'crowd.camera'
+type ConfigTab = 'models' | 'rules' | 'zones'
+const CONFIG_TABS: { id: ConfigTab; label: string }[] = [
+  { id: 'models', label: 'Mô hình' }, { id: 'rules', label: 'Cảnh báo' }, { id: 'zones', label: 'Vùng' },
+]
 
 function savedCamera(): number | null {
   try {
@@ -23,8 +29,9 @@ function savedCamera(): number | null {
 }
 
 /**
- * Trang Giám sát: dải camera ở trên; camera chính ở dưới với bố cục phòng điều khiển
- * (trái: mô hình và luật · giữa: video và diễn biến · phải: số liệu, vùng, cảnh báo).
+ * Trang Giám sát, vừa khít màn hình (không cuộn cả trang, chỉ từng khung tự cuộn).
+ * Trái: thanh camera, video, diễn biến. Phải: số liệu, vùng, cảnh báo; nút "Cấu hình" thay cột phải bằng
+ * ba mục mô hình, luật, vùng.
  */
 export function MonitorPage({ me, live, cameras, onCamerasChanged }: {
   me: Me; live: LiveMessage | null; cameras: CameraSummary[]; onCamerasChanged: () => void
@@ -48,6 +55,9 @@ export function MonitorPage({ me, live, cameras, onCamerasChanged }: {
   const [draft, setDraft] = useState<ZoneSet | null>(null)
   const [tool, setTool] = useState<ZoneTool>('roi')
   const [zoneError, setZoneError] = useState<string | null>(null)
+  const [config, setConfig] = useState<ConfigTab | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [starting, setStarting] = useState<string | null>(null)
   const [series, setSeries] = useState<SeriesRow[]>([])
   const [events, setEvents] = useState<EventRow[]>([])
 
@@ -58,6 +68,7 @@ export function MonitorPage({ me, live, cameras, onCamerasChanged }: {
   // Đổi camera hoặc lần chạy mới: nạp lại vùng, chuỗi số liệu, cảnh báo
   useEffect(() => {
     setDraft(null)
+    setConfig(null)
     setSeries([])
     setEvents([])
     if (selected == null || !run) return
@@ -102,49 +113,65 @@ export function MonitorPage({ me, live, cameras, onCamerasChanged }: {
     }
   }
 
+  const startZones = () => {
+    setConfig(null)
+    setDraft(zones)
+  }
+
   return (
     <div className="monitor">
-      <CameraStrip cameras={cameras} live={live} selected={selected} onSelect={select} canEdit={canEdit}
-        onChanged={onCamerasChanged} />
+      <main className="monitor-main">
+        <CameraStrip cameras={cameras} live={live} selected={selected} onSelect={select} canEdit={canEdit}
+          onChanged={onCamerasChanged} onAdd={() => setAdding(true)} onStarting={setStarting} />
+        <VideoPanel starting={starting} status={status} canEdit={canEdit} configOpen={config != null}
+          onConfig={() => setConfig(config ? null : 'models')} draft={draft} tool={tool} onDraft={setDraft} onTool={setTool}
+          onStartEdit={startZones} onSave={() => saveZones()} onCancel={() => setDraft(null)} zoneError={zoneError} />
+        <Timeline series={series} events={events} tz={tz} limit={status?.anomaly.limit ?? null} />
+      </main>
 
-      <div className="app">
-        <aside className="rail rail-left" aria-label="Mô hình và luật">
-          {status ? (
-            <>
-              <PipelineCard status={status} canEdit={canEdit} />
-              <RulesCard key={selected ?? 0} status={status} canEdit={canEdit} />
-            </>
-          ) : (
-            <section className="card">
-              <h2>Đề tài</h2>
-              <ol className="steps">
-                <li><b>Giai đoạn 1 · Đếm người:</b> MobileCount + Mask ước lượng bản đồ mật độ và vùng có người.</li>
-                <li><b>Khoanh vùng:</b> vùng giám sát có tên và sức chứa, vùng loại trừ (đèn, biển hiệu).</li>
-                <li><b>Giai đoạn 2 · Phát hiện bất thường:</b> mô hình học chuyển động bình thường của camera, cảnh báo khi lệch.</li>
-                <li><b>Lịch sử:</b> mọi cảnh báo lưu ảnh, clip; xem lại và thống kê ở các trang bên trên.</li>
-              </ol>
-            </section>
-          )}
-        </aside>
+      <aside className="monitor-side" aria-label={config ? 'Cấu hình camera' : 'Số liệu trực tiếp và cảnh báo'}>
+        {status && config && !draft ? (
+          <>
+            <div className="side-head">
+              <div className="segmented" role="tablist" aria-label="Mục cấu hình">
+                {CONFIG_TABS.map((t) => (
+                  <button key={t.id} role="tab" aria-selected={config === t.id} className={config === t.id ? 'on' : ''}
+                    onClick={() => setConfig(t.id)}>{t.label}</button>
+                ))}
+              </div>
+              <button className="btn btn-ghost btn-icon" onClick={() => setConfig(null)} aria-label="Đóng cấu hình">
+                <Icon name="x" />
+              </button>
+            </div>
+            <div className="side-scroll">
+              {config === 'models' && <PipelineCard status={status} canEdit={canEdit} />}
+              {config === 'rules' && <RulesCard key={selected ?? 0} status={status} canEdit={canEdit} />}
+              {config === 'zones' && (
+                <>
+                  {canEdit && <button className="btn btn-primary" onClick={startZones}><Icon name="zone" size={14} /> Vẽ vùng trên video</button>}
+                  <ZonesCard status={status} zones={zones} editing={false} canEdit={canEdit}
+                    onChange={setDraft} onSave={(z) => saveZones(z)} />
+                </>
+              )}
+            </div>
+          </>
+        ) : status ? (
+          <>
+            <KpiCard status={status} />
+            {(draft || zones.roi.length > 0) && (
+              <div className="side-zones">
+                <ZonesCard status={status} zones={draft ?? zones} editing={!!draft} canEdit={canEdit}
+                  onChange={setDraft} onSave={(z) => saveZones(z)} />
+              </div>
+            )}
+            <AlertsCard events={events} tz={tz} canJudge={canEdit} onChanged={loadEvents} />
+          </>
+        ) : (
+          <p className="muted small side-empty">Chưa có camera đang chạy. Số liệu và cảnh báo sẽ hiện ở đây.</p>
+        )}
+      </aside>
 
-        <main className="center">
-          <VideoPanel status={status} canEdit={canEdit} draft={draft} tool={tool} onDraft={setDraft} onTool={setTool}
-            onStartEdit={() => setDraft(zones)} onSave={() => saveZones()} onCancel={() => setDraft(null)}
-            zoneError={zoneError} />
-          <Timeline series={series} events={events} tz={tz} limit={status?.anomaly.limit ?? null} />
-        </main>
-
-        <aside className="rail rail-right" aria-label="Số liệu trực tiếp và cảnh báo">
-          {status && (
-            <>
-              <KpiCard status={status} />
-              <ZonesCard status={status} zones={draft ?? zones} editing={!!draft} canEdit={canEdit}
-                onChange={setDraft} onSave={(z) => saveZones(z)} />
-              <AlertsCard events={events} tz={tz} onChanged={loadEvents} />
-            </>
-          )}
-        </aside>
-      </div>
+      {adding && <QuickAddCard onAdded={onCamerasChanged} onSelect={select} onClose={() => setAdding(false)} />}
     </div>
   )
 }

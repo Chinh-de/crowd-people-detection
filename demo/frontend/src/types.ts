@@ -8,6 +8,7 @@ export type Polygon = Point[]
 export interface ZoneMeta {
   name: string
   limit: number | null
+  direction?: number | null
 }
 
 export interface ZoneSet {
@@ -31,10 +32,8 @@ export interface SourceInfo {
 
 export interface Thresholds {
   count_limit: number | null
-  overcrowd: number | null
-  hot_cell: number | null
   panic_score: number | null
-  counterflow: number | null
+  counterflow: number
 }
 
 export interface AnomalyStatus {
@@ -55,6 +54,8 @@ export interface ZoneCount {
   name: string
   count: number
   limit: number | null
+  direction: number | null
+  wrong_share: number | null
 }
 
 export interface Status {
@@ -65,9 +66,9 @@ export interface Status {
   mode: ViewMode
   model: string
   source: SourceInfo | null
-  counts: { total: number; roi: number; excluded: number; max_cell: number; hot_cells: number }
+  counts: { total: number; roi: number; excluded: number; max_cell: number }
   motion: { speed: number; direction_deg: number; entropy: number; counterflow: number; active_ratio: number }
-  perf: { video_fps: number; analysis_fps: number; analysis_ms: number }
+  perf: { video_fps: number; analysis_fps: number; analysis_ms: number; delay_ms: number }
   calibration: { done: boolean; have: number; need: number }
   anomaly: AnomalyStatus
   zones: ZoneCount[]
@@ -78,21 +79,14 @@ export interface Status {
 }
 
 export interface RuleConfig {
-  k_sigma: number
   persist_s: number
   cooldown_s: number
   smooth: number
-  count_margin_abs: number
-  count_margin_rel: number
   surge_window_s: number
   surge_abs: number
   surge_rel: number
-  cell_factor: number
-  min_cell_limit: number
   panic_persist_s: number
-  counterflow_k: number
-  min_counterflow: number
-  baseline_window_s: number
+  counterflow_share: number
   count_limit: number | null
   enabled: Record<RuleName, boolean>
 }
@@ -113,7 +107,14 @@ export interface EventRow {
   ack_at: number | null
   note: string | null
   purged: number
+  has_sample: number
+  verdict: Verdict | null
+  verdict_by: string | null
+  verdict_at: number | null
 }
+
+export type Verdict = 'true' | 'false'
+export type VerdictCounts = Record<'none' | Verdict, number>
 
 export interface SeriesRow {
   t: number
@@ -124,6 +125,7 @@ export interface SeriesRow {
 }
 
 export interface CountModelInfo {
+  mae_dublin: number | null
   name: string
   label: string
   available: boolean
@@ -178,12 +180,12 @@ export interface LiveMessage {
 export interface Me {
   name: string
   role: 'admin' | 'viewer'
-  default_credentials: boolean
 }
 
 export interface EventPage {
   rows: EventRow[]
   total: number
+  verdicts: VerdictCounts
 }
 
 export interface StatsResponse {

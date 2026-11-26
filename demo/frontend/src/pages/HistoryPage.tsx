@@ -2,8 +2,8 @@ import { useCallback, useEffect, useState } from 'react'
 import { api, type EventFilter } from '../api'
 import { EventModal } from '../components/EventModal'
 import { Icon } from '../components/Icon'
-import { RULE_LABELS, clock } from '../format'
-import type { CameraSummary, EventRow, RuleName } from '../types'
+import { RULE_LABELS, VERDICT_LABELS, clock } from '../format'
+import type { CameraSummary, EventRow, RuleName, VerdictCounts } from '../types'
 
 const PAGE = 25
 const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
@@ -12,27 +12,31 @@ const LOCAL_TZ = Intl.DateTimeFormat().resolvedOptions().timeZone
 const toSec = (v: string) => (v ? new Date(v).getTime() / 1000 : undefined)
 
 /** Trang Lịch sử cảnh báo: lọc, phân trang, xem clip và diễn biến, xác nhận đã xử lý, xuất CSV. */
-export function HistoryPage({ cameras, unacked }: { cameras: CameraSummary[]; unacked: number }) {
+export function HistoryPage({ cameras, unacked, canJudge }: {
+  cameras: CameraSummary[]; unacked: number; canJudge: boolean
+}) {
   const [cameraId, setCameraId] = useState('')
   const [rule, setRule] = useState('')
   const [status, setStatus] = useState('')
+  const [verdict, setVerdict] = useState('')
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [page, setPage] = useState(0)
   const [rows, setRows] = useState<EventRow[]>([])
   const [total, setTotal] = useState(0)
   const [open, setOpen] = useState<EventRow | null>(null)
+  const [counts, setCounts] = useState<VerdictCounts>({ none: 0, true: 0, false: 0 })
   const [error, setError] = useState<string | null>(null)
 
   const filter: EventFilter = {
-    camera_id: cameraId ? Number(cameraId) : undefined, rule: rule || undefined, status: status || undefined,
+    camera_id: cameraId ? Number(cameraId) : undefined, rule: rule || undefined, status: status || undefined, verdict: verdict || undefined,
     t0: toSec(from), t1: toSec(to),
   }
   const key = JSON.stringify(filter)
 
   const load = useCallback(() => {
     api.events({ ...JSON.parse(key), limit: PAGE, offset: page * PAGE })
-      .then((p) => { setRows(p.rows); setTotal(p.total); setError(null) })
+      .then((p) => { setRows(p.rows); setTotal(p.total); setCounts(p.verdicts); setError(null) })
       .catch((e: Error) => setError(e.message))
   }, [key, page])
 
@@ -48,10 +52,25 @@ export function HistoryPage({ cameras, unacked }: { cameras: CameraSummary[]; un
       <header className="page-head">
         <div>
           <h2>Lịch sử cảnh báo</h2>
-          <p className="muted small">{total} cảnh báo · {unacked} chưa xử lý · giờ theo múi giờ của từng camera</p>
+          <p className="muted small">{total} cảnh báo đang xem · {unacked} chưa xử lý · giờ theo múi giờ của từng camera</p>
         </div>
-        <a className="btn" href={api.eventsCsvUrl(filter)} download><Icon name="download" size={14} /> Xuất CSV</a>
+        <div className="row">
+          {canJudge && (
+            <a className="btn" href={api.feedbackExportUrl} download title="Ảnh gốc, mask, nhãn nháp và đặc trưng của các cảnh báo đã phân loại, dùng để fine-tune">
+              <Icon name="download" size={14} /> Xuất mẫu đã phân loại
+            </a>
+          )}
+          <a className="btn" href={api.eventsCsvUrl(filter)} download><Icon name="download" size={14} /> Xuất CSV</a>
+        </div>
       </header>
+
+      <div className="segmented" role="tablist" aria-label="Phân loại cảnh báo">
+        {([['', 'Tất cả', counts.none + counts.true + counts.false], ['none', 'Chưa phân loại', counts.none],
+          ['true', VERDICT_LABELS.true, counts.true], ['false', VERDICT_LABELS.false, counts.false]] as const).map(([v, label, n]) => (
+          <button key={v} role="tab" aria-selected={verdict === v} className={verdict === v ? 'on' : ''}
+            onClick={() => setVerdict(v)}>{label} <span className="mono muted">{n}</span></button>
+        ))}
+      </div>
 
       <section className="card filters" aria-label="Bộ lọc">
         <label className="field">
@@ -84,7 +103,7 @@ export function HistoryPage({ cameras, unacked }: { cameras: CameraSummary[]; un
           <span>Đến</span>
           <input type="datetime-local" value={to} onChange={(e) => setTo(e.target.value)} />
         </label>
-        <button className="btn btn-ghost" onClick={() => { setCameraId(''); setRule(''); setStatus(''); setFrom(''); setTo('') }}>
+        <button className="btn btn-ghost" onClick={() => { setCameraId(''); setRule(''); setStatus(''); setVerdict(''); setFrom(''); setTo('') }}>
           Xóa lọc
         </button>
       </section>
@@ -97,7 +116,7 @@ export function HistoryPage({ cameras, unacked }: { cameras: CameraSummary[]; un
             <thead>
               <tr>
                 <th scope="col">Ảnh</th><th scope="col">Thời điểm</th><th scope="col">Camera</th><th scope="col">Loại</th>
-                <th scope="col">Nội dung</th><th scope="col">Trạng thái</th>
+                <th scope="col">Nội dung</th><th scope="col">Trạng thái</th><th scope="col">Phân loại</th>
               </tr>
             </thead>
             <tbody>
@@ -114,9 +133,11 @@ export function HistoryPage({ cameras, unacked }: { cameras: CameraSummary[]; un
                       ? <span className="status-ok"><Icon name="check" size={13} /> {e.ack_by}</span>
                       : <span className="status-new">Chưa xử lý</span>}
                   </td>
+                  <td>{e.verdict ? <span className={`verdict-tag v-${e.verdict}`}>{VERDICT_LABELS[e.verdict]}</span>
+                    : <span className="muted">–</span>}</td>
                 </tr>
               ))}
-              {rows.length === 0 && <tr><td colSpan={6} className="muted center">Không có cảnh báo nào khớp bộ lọc.</td></tr>}
+              {rows.length === 0 && <tr><td colSpan={7} className="muted center">Không có cảnh báo nào khớp bộ lọc.</td></tr>}
             </tbody>
           </table>
         </div>
@@ -127,7 +148,7 @@ export function HistoryPage({ cameras, unacked }: { cameras: CameraSummary[]; un
         </div>
       </section>
 
-      {open && <EventModal event={open} tz={tzOf(open)} onClose={() => setOpen(null)}
+      {open && <EventModal event={open} tz={tzOf(open)} canJudge={canJudge} onClose={() => setOpen(null)}
         onAcked={(e) => { setOpen(e); load() }} />}
     </div>
   )

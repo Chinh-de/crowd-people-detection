@@ -36,7 +36,7 @@ def wait_for(cond, timeout=10.0):
 
 def test_pipeline_produces_frames_and_status(pipeline, sample_video):
     pipeline.start({"kind": "file", "path": str(sample_video), "tz": "UTC"})
-    assert wait_for(lambda: pipeline.status()["perf"]["analysis_fps"] > 0)
+    assert wait_for(lambda: pipeline.status()["perf"]["analysis_fps"] > 0 and pipeline.frame_seq >= 20)   # video phát trễ nên chờ đủ vài frame
     s = pipeline.status()
     assert pipeline.latest_jpeg() is not None and s["state"] == "running"
     assert 6 <= s["perf"]["video_fps"] <= 13

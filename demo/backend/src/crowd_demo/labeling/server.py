@@ -5,7 +5,7 @@ import json
 import re
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
@@ -23,9 +23,10 @@ class Label(BaseModel):
     note: str = ""
 
 
-def create_app(root: Path) -> FastAPI:
+def build_router(root: Path, on_status=None, dependencies=None, prefix: str = "/api") -> APIRouter:
+    """Các API đọc/ghi nhãn trong `root`. `on_status(request, ảnh, trạng_thái)` được gọi khi trạng thái đổi."""
     frames, labels = root / "frames", root / "labels"
-    app = FastAPI(title="Chỉnh nhãn đầu người")
+    router = APIRouter(prefix=prefix, dependencies=dependencies or [])
 
     def image_path(name: str) -> Path:
         p = frames / name
@@ -39,11 +40,7 @@ def create_app(root: Path) -> FastAPI:
             return json.loads(p.read_text(encoding="utf-8"))
         return {"image": name, "points": [], "ignore": [], "auto_count": None, "status": "auto", "note": ""}
 
-    @app.get("/")
-    def index():
-        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})   # luôn lấy bản mới khi cập nhật
-
-    @app.get("/api/items")
+    @router.get("/items")
     def items():
         out = []
         for p in sorted(frames.glob("*.jpg")):
@@ -52,29 +49,43 @@ def create_app(root: Path) -> FastAPI:
                         "status": lab.get("status", "auto"), "note": lab.get("note", "")})
         return out
 
-    @app.get("/api/image/{name}")
+    @router.get("/image/{name}")
     def image(name: str):
         return FileResponse(image_path(name), media_type="image/jpeg")
 
-    @app.get("/api/label/{name}")
+    @router.get("/label/{name}")
     def get_label(name: str):
         image_path(name)
         return read_label(name)
 
-    @app.put("/api/label/{name}")
-    def put_label(name: str, body: Label):
+    @router.put("/label/{name}")
+    def put_label(name: str, body: Label, request: Request):
         image_path(name)
         if body.status not in STATUSES:
             raise HTTPException(422, f"status phải là một trong {STATUSES}")
         rec = read_label(name)
+        changed = rec.get("status", "auto") != body.status
         rec.update(points=[[round(x, 1), round(y, 1)] for x, y in body.points],
                    ignore=[[[round(x, 1), round(y, 1)] for x, y in poly] for poly in body.ignore if len(poly) >= 3],
                    status=body.status, note=body.note,
                    updated=dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"))
         labels.mkdir(parents=True, exist_ok=True)
         (labels / (Path(name).stem + ".json")).write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+        if changed and on_status:
+            on_status(request, name, body.status)
         return {"ok": True, "count": len(rec["points"])}
 
+    return router
+
+
+def create_app(root: Path) -> FastAPI:
+    app = FastAPI(title="Chỉnh nhãn đầu người")
+
+    @app.get("/")
+    def index():
+        return FileResponse(STATIC / "index.html", headers={"Cache-Control": "no-store"})   # luôn lấy bản mới khi cập nhật
+
+    app.include_router(build_router(root))
     return app
 
 

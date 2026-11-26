@@ -12,6 +12,8 @@ const ACTIONS: Record<string, string> = {
   start_camera: 'Bật camera', stop_camera: 'Tắt camera', upload_video: 'Tải video lên',
   set_zones: 'Sửa vùng', set_rules: 'Sửa luật', set_model: 'Đổi mô hình đếm', set_anomaly_model: 'Đổi mô hình bất thường',
   calibrate: 'Học lại mức bình thường', ack_event: 'Xác nhận cảnh báo',
+  verdict: 'Phân loại cảnh báo', to_labeling: 'Gửi sang Gắn nhãn',
+  label_status: 'Duyệt nhãn', label_capture: 'Chụp khung để gắn nhãn', label_export: 'Xuất dataset',
 }
 
 /** Trang Nhật ký thao tác (quản trị): ai làm gì, lúc nào. */

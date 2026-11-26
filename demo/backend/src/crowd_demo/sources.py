@@ -49,7 +49,7 @@ class FileSource:
         self._frame_idx = 0
         self._start = time.time()            # thời điểm ứng với frame 0 của vòng lặp đầu tiên
         self._played = 0.0                    # tổng thời gian video đã phát qua các vòng lặp
-        self._next_due = time.monotonic()
+        self._next_due: float | None = None    # đặt ở lần đọc đầu, để lúc mới mở không bị tính là trễ
 
     @property
     def paused(self) -> bool:
@@ -83,11 +83,19 @@ class FileSource:
             time.sleep(0.05)
         if self._interrupted:
             return None
+        if self._next_due is None:
+            self._next_due = time.monotonic()
         delay = self._next_due - time.monotonic()
         if delay > 0:
             time.sleep(delay)
-        self._next_due = max(self._next_due + 1 / self.fps, time.monotonic() - 1)
         with self._lock:
+            # đọc không kịp FPS gốc: bỏ frame quá hạn (tối đa 1 giây) để video vẫn đúng tốc độ, không chậm rồi chạy dồn
+            late = min(int((time.monotonic() - self._next_due) * self.fps), int(self.fps))
+            skipped = 0
+            while skipped < late and self._cap.grab():
+                skipped += 1
+            self._frame_idx += skipped
+            self._next_due = max(self._next_due + (skipped + 1) / self.fps, time.monotonic() - 1 / self.fps)
             ok, frame = self._cap.read()
             if not ok:                                   # hết video: phát lại từ đầu
                 self._played += self.position_s

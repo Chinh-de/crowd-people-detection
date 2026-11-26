@@ -24,7 +24,9 @@ from pydantic import BaseModel
 from .anomaly import ANOMALY_MODELS, NORM_MODES, available as anomaly_available
 from .auth import COOKIE, Auth, User
 from .cameras import CameraLimitError, CameraManager, rule_config_from
-from .config import BACKEND_DIR, DEFAULT_MODEL, DEMO_DIR, MODEL_METRICS, MODELS, VIDEO_EXTS, VIEW_MODES, Settings
+from .feedback import mount_feedback
+from .labeling.api import mount_labeling
+from .config import BACKEND_DIR, DEFAULT_MODEL, DEMO_DIR, MODEL_MAE_DUBLIN, MODEL_METRICS, MODELS, VIDEO_EXTS, VIEW_MODES, Settings
 from .model import CountModel, load_model, warmup
 from .pipeline import Pipeline
 from .rules import RuleConfig
@@ -72,6 +74,7 @@ class ViewRequest(BaseModel):
 class ZoneMeta(BaseModel):
     name: str = ""
     limit: float | None = None
+    direction: float | None = None
 
 
 class ZonesBody(BaseModel):
@@ -104,9 +107,6 @@ def create_app(settings: Settings | None = None, model: CountModel | None = None
         load_dotenv(BACKEND_DIR / ".env")
         env = dict(os.environ)
     auth = Auth(env)
-    if auth.using_default:
-        log.warning("CHƯA ĐẶT CROWD_ADMIN_USER / CROWD_ADMIN_PASSWORD: đang dùng tài khoản mặc định admin/admin. "
-                    "Hãy tạo demo/backend/.env theo .env.example.")
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -121,6 +121,7 @@ def create_app(settings: Settings | None = None, model: CountModel | None = None
             warmup(m, settings.analysis_width)
         app.state.models = models
         app.state.db = Database(settings.db_path)
+        auth.attach(app.state.db)
         app.state.cameras = CameraManager(settings, app.state.db, models)
         app.state.cameras.seed_defaults()
         app.state.cameras.autostart()
@@ -181,12 +182,16 @@ def create_app(settings: Settings | None = None, model: CountModel | None = None
 
     @app.get("/api/me")
     def me(user: User = Depends(current_user)) -> dict:
-        return {"name": user.name, "role": user.role, "default_credentials": auth.using_default}
+        return {"name": user.name, "role": user.role}
 
     @app.get("/api/system")
     def system() -> dict:
         return {"max_cameras": settings.max_cameras, "running": len(mgr().running_ids()),
                 "unacked": db().unacked_count(), "cpu_count": os.cpu_count(), "clip_days": settings.clip_days}
+
+    app.state.settings = settings
+    mount_labeling(app, settings, admin)
+    mount_feedback(app, settings, admin)
 
     # ---------------------------------------------------------------- model và video
     @app.get("/api/models")
@@ -195,7 +200,7 @@ def create_app(settings: Settings | None = None, model: CountModel | None = None
         for name, (label, _) in MODELS.items():
             loaded = app.state.models.get(name)
             mae, mse = MODEL_METRICS.get(name, (None, None))
-            out.append({"name": name, "label": label, "mae": mae, "mse": mse,
+            out.append({"name": name, "label": label, "mae": mae, "mse": mse, "mae_dublin": MODEL_MAE_DUBLIN.get(name),
                         "available": loaded is not None or settings.model_file(name).exists(),
                         "has_mask": None if loaded is None else loaded.mask_head is not None})
         return out
@@ -419,23 +424,26 @@ def create_app(settings: Settings | None = None, model: CountModel | None = None
 
     # ---------------------------------------------------------------- lịch sử cảnh báo
     def event_filters(camera_id: int | None, rule: str | None, status: str | None,
-                      t0: float | None, t1: float | None) -> dict:
-        return {"camera_id": camera_id, "rule": rule or None, "status": status or None, "t0": t0, "t1": t1}
+                      t0: float | None, t1: float | None, verdict: str | None = None) -> dict:
+        return {"camera_id": camera_id, "rule": rule or None, "status": status or None, "t0": t0, "t1": t1,
+                "verdict": verdict or None}
 
     @app.get("/api/events")
     def events(camera_id: int | None = None, rule: str | None = None, status: str | None = None,
-               t0: float | None = None, t1: float | None = None, limit: int = 50, offset: int = 0) -> dict:
-        rows, total = db().query_events(**event_filters(camera_id, rule, status, t0, t1),
+               t0: float | None = None, t1: float | None = None, limit: int = 50, offset: int = 0,
+               verdict: str | None = None) -> dict:
+        rows, total = db().query_events(**event_filters(camera_id, rule, status, t0, t1, verdict),
                                         limit=max(1, min(limit, 500)), offset=max(0, offset))
-        return {"rows": rows, "total": total}
+        counts = db().verdict_counts(camera_id, rule or None, status or None, t0, t1)
+        return {"rows": rows, "total": total, "verdicts": counts}
 
     @app.get("/api/events.csv")
     def events_csv(camera_id: int | None = None, rule: str | None = None, status: str | None = None,
-                   t0: float | None = None, t1: float | None = None) -> Response:
-        rows, _ = db().query_events(**event_filters(camera_id, rule, status, t0, t1), limit=100_000)
+                   t0: float | None = None, t1: float | None = None, verdict: str | None = None) -> Response:
+        rows, _ = db().query_events(**event_filters(camera_id, rule, status, t0, t1, verdict), limit=100_000)
         buf = io.StringIO()
         cols = ["id", "t", "camera_id", "source", "rule", "value", "threshold", "message", "status", "ack_by", "ack_at",
-                "note", "snapshot", "clip"]
+                "note", "verdict", "verdict_by", "snapshot", "clip"]
         w = csv.DictWriter(buf, fieldnames=cols, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
@@ -509,7 +517,8 @@ def _purge_loop(db: Database, settings: Settings, stop: threading.Event) -> None
     """Dọn số liệu thô và clip cũ lúc khởi động và định kỳ."""
     while not stop.is_set():
         try:
-            out = db.purge(time.time(), settings.raw_days, settings.clip_days, settings.evidence_dir)
+            out = db.purge(time.time(), settings.raw_days, settings.clip_days, settings.evidence_dir,
+                           settings.samples_dir)
             if out["samples"] or out["clips"]:
                 log.info("Đã dọn %s mẫu thô, %s clip cũ", out["samples"], out["clips"])
         except Exception:

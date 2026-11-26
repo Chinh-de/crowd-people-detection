@@ -1,14 +1,16 @@
 """Ghép các module thành hệ thống chạy liên tục.
 
 Hai luồng:
-- Luồng đọc: lấy frame ở FPS gốc, vẽ lớp phủ mới nhất, mã hóa JPEG cho luồng MJPEG.
+- Luồng đọc: lấy frame ở FPS gốc, phát trễ một chút (sync.py), vẽ lớp phủ khớp frame, mã hóa JPEG cho luồng MJPEG.
 - Luồng phân tích: lấy frame mới nhất, chạy model + optical flow + luật, cập nhật lớp phủ và CSDL.
-Lớp phủ vì vậy trễ hơn hình đúng bằng thời gian một lần phân tích, nhưng video luôn mượt.
+Video trễ hơn thực tế khoảng một lần phân tích, đổi lại lớp phủ khớp với hình và video vẫn mượt.
 """
 import json
+import logging
 import re
 import threading
 import time
+from collections import deque
 from dataclasses import asdict
 from pathlib import Path
 
@@ -21,29 +23,38 @@ from .density import analyze_density
 from .domain import DensityStats, MotionStats
 from .evidence import EvidenceRecorder, FrameRing
 from .model import STRIDE, CountModel, infer
-from .motion import compute_flow, flow_features
+from .motion import compute_flow, flow_features, wrong_way
 from .overlay import Layers, render
 from .rules import RuleConfig, RuleEngine
+from .samples import save_sample
 from .sources import FileSource, SourceError, VideoSource, open_source
 from .storage import Database, Store
+from .sync import OverlaySync
 from .zones import ZoneSet
 
+SAMPLE_FEATS = 32        # số lần phân tích gần nhất lưu kèm mỗi cảnh báo (đủ cửa sổ 16 mẫu của autoencoder)
 AUTO_CALIB_AFTER = 5     # tự học mức bình thường sau ngần này lần phân tích (để đo được tốc độ phân tích)
 MAX_UPSCALE = 2.0        # không phóng frame quá 2 lần: video nhỏ (UMN 320×240) phóng lên 960 làm đầu người quá to,
                          # mô hình đếm gần như bằng 0 (đo trên UMN: 960 px → 0,2 người; 640 px → 5,5 người)
 
+log = logging.getLogger(__name__)
+
 
 class _Rate:
-    """Tốc độ (lần/giây) làm mượt bằng trung bình trượt mũ."""
+    """Tốc độ (lần/giây) trên cửa sổ WINDOW lần gần nhất: số khoảng chia tổng thời gian.
+    Không lấy 1/khoảng cách từng lần, để hai lần sát nhau không làm số vọt lên."""
+
+    WINDOW = 30
 
     def __init__(self):
-        self.value, self._last = 0.0, None
+        self.value = 0.0
+        self._times: deque[float] = deque(maxlen=self.WINDOW)
 
     def tick(self, now: float) -> None:
-        if self._last is not None and now > self._last:
-            inst = 1.0 / (now - self._last)
-            self.value = inst if self.value == 0 else 0.9 * self.value + 0.1 * inst
-        self._last = now
+        self._times.append(now)
+        span = now - self._times[0]
+        if span > 0:
+            self.value = (len(self._times) - 1) / span
 
 
 def source_slug(spec: dict) -> str:
@@ -81,7 +92,8 @@ class Pipeline:
         self.engine = RuleEngine(self.rule_config)
         self.monitor = AnomalyMonitor(self.anomaly_name, self.settings.models_dir, self.anomaly_norm)
         self._latest: tuple[float, np.ndarray] | None = None
-        self._layers: Layers | None = None
+        self._recent_feats: deque = deque(maxlen=SAMPLE_FEATS)
+        self.sync = OverlaySync()
         self._jpeg: bytes | None = None
         self.frame_seq = 0
         self._video_rate, self._analysis_rate = _Rate(), _Rate()
@@ -130,7 +142,7 @@ class Pipeline:
         self._reset_run_state()
 
     def set_model(self, name: str, model: CountModel) -> None:
-        """Đổi model khi đang chạy. Hai model đếm lệch nhau nên học lại mức bình thường."""
+        """Đổi model khi đang chạy. Hai model cho mask và mật độ khác nhau nên mô hình bất thường học lại."""
         self.model, self.model_name = model, name
         self._changed("model", name)
         if self.state == "running":
@@ -146,6 +158,17 @@ class Pipeline:
         self.monitor.select(name, norm)          # ném FileNotFoundError nếu thiếu file trọng số
         self.anomaly_name, self.anomaly_norm = name, self.monitor.norm_mode
         self._changed("anomaly", {"name": name, "norm": self.anomaly_norm})
+
+    def _save_sample(self, event_id: int, alert, frame: np.ndarray, res) -> None:
+        try:
+            save_sample(self.settings.samples_dir / str(event_id), frame, res.density, res.mask, res.scale,
+                        list(self._recent_feats),
+                        {"event_id": event_id, "camera_id": self.camera_id, "camera": self.name, "t": alert.t,
+                         "rule": alert.rule, "value": alert.value, "threshold": alert.threshold,
+                         "count_model": self.model_name, "anomaly_model": self.monitor.name})
+            self.db.mark_sample(event_id)
+        except Exception:            # không lưu được mẫu thì vẫn phải tiếp tục giám sát
+            log.exception("Không lưu được mẫu của cảnh báo #%s", event_id)
 
     def set_mode(self, mode: str) -> None:
         if mode not in VIEW_MODES:
@@ -176,7 +199,6 @@ class Pipeline:
 
     def calibrate(self, seconds: float) -> None:
         rate = max(self._analysis_rate.value, 0.5)
-        self.engine.start_calibration(seconds, time.time(), rate)
         self.monitor.start_calibration(int(round(seconds * rate)))
 
     def playback(self, action: str, value: float | None = None) -> None:
@@ -193,6 +215,11 @@ class Pipeline:
         return ZoneSet()
 
     # ---------- truy vấn ----------
+    def raw_frame(self) -> np.ndarray | None:
+        """Frame gốc mới nhất (chưa vẽ lớp phủ, chưa thu nhỏ), dùng để chụp ảnh gắn nhãn."""
+        with self._lock:
+            return None if self._latest is None else self._latest[1].copy()
+
     def latest_jpeg(self) -> bytes | None:
         return self._jpeg
 
@@ -203,7 +230,6 @@ class Pipeline:
 
     def status(self) -> dict:
         src, d, m, mon = self.source, self._density, self._motion, self.monitor
-        have, need = self.engine.calibration_progress()
         a_have, a_need = mon.progress()
         last = mon.last
         label, kind, auc = ANOMALY_MODELS[mon.name]
@@ -217,17 +243,18 @@ class Pipeline:
         return {
             "camera_id": self.camera_id, "camera": self.name,
             "state": self.state, "error": self.error, "mode": self.mode, "model": self.model_name, "source": source,
-            "counts": {"total": d.total, "roi": d.roi, "excluded": d.excluded, "max_cell": d.max_cell,
-                       "hot_cells": len(d.hot_cells)},
+            "counts": {"total": d.total, "roi": d.roi, "excluded": d.excluded, "max_cell": d.max_cell},
             "motion": {"speed": m.speed, "direction_deg": m.direction_deg, "entropy": m.entropy,
                        "counterflow": m.counterflow, "active_ratio": m.active_ratio},
             "perf": {"video_fps": round(self._video_rate.value, 1), "analysis_fps": round(self._analysis_rate.value, 2),
-                     "analysis_ms": round(self._analysis_ms)},
-            "calibration": {"done": self.engine.calibrated and mon.ready, "have": have, "need": need},
+                     "analysis_ms": round(self._analysis_ms),
+                     "delay_ms": round(self.sync.delay * 1000)},
+            "calibration": {"done": mon.ready, "have": a_have, "need": a_need},
             "anomaly": {"model": mon.name, "label": label, "kind": kind, "umn_auc": auc, "norm": mon.norm_mode,
                         "ready": mon.ready, "learning": mon.learning, "have": a_have, "need": a_need,
                         "score": None if last is None else last.score, "limit": None if last is None else last.limit},
-            "zones": [{"name": z.name, "count": z.count, "limit": z.limit} for z in d.zones],
+            "zones": [{"name": z.name, "count": z.count, "limit": z.limit, "direction": z.direction,
+                       "wrong_share": z.wrong_share} for z in d.zones],
             "thresholds": self.engine.thresholds(),
             "active_alerts": self.engine.active(),
             "latest_event_id": self._latest_event_id,
@@ -237,6 +264,7 @@ class Pipeline:
     # ---------- luồng đọc ----------
     def _read_loop(self) -> None:
         s = self.settings
+        period, next_emit = 1 / s.stream_fps, 0.0
         while not self._stop.is_set():
             try:
                 item = self.source.read()
@@ -249,8 +277,16 @@ class Pipeline:
             self.ring.push(t, frame)
             with self._lock:
                 self._latest = (t, frame)
-                layers = self._layers
-            img = render(frame, layers, self.mode, s.stream_width)
+            if t < next_emit - 1e-3:      # chỉ vẽ và nén theo nhịp hiển thị cố định
+                continue
+            next_emit = max(next_emit + period, t + period / 2)
+            h, w = frame.shape[:2]
+            if w > s.stream_width:        # thu nhỏ trước khi xếp hàng chờ để bộ đệm trễ không tốn RAM
+                frame = cv2.resize(frame, (s.stream_width, round(h * s.stream_width / w)), interpolation=cv2.INTER_AREA)
+            due = self.sync.push(t, frame)
+            if due is None:
+                continue
+            img = render(due[0], due[1], self.mode, s.stream_width)
             ok, buf = cv2.imencode(".jpg", img, [cv2.IMWRITE_JPEG_QUALITY, s.jpeg_quality])
             if ok:
                 with self._frame_cond:
@@ -273,38 +309,55 @@ class Pipeline:
             started = time.perf_counter()
 
             res = infer(self.model, frame, min(s.analysis_width, round(MAX_UPSCALE * frame.shape[1])))
-            cell = max(1, round(s.cell_px / STRIDE))
-            d = analyze_density(res.density, zones, cell, self.engine.cell_limit)
+            d = analyze_density(res.density, zones, max(1, round(s.cell_px / STRIDE)))
             motion = self._motion_stats(last_t, res, zones)
             if motion is None:      # chưa có cặp frame hợp lệ (vừa bắt đầu / luồng bị khựng): giữ số đo trước
                 m, flow, valid, feats = self._motion, None, None, None
             else:
                 m, flow, valid, feats = motion
+            if feats is not None:
+                self._recent_feats.append(feats)
             reading = None if feats is None else self.monitor.update(feats)
 
+            wrong = None if flow is None else self._check_directions(d, zones, flow, valid)
+
             alerts = self.engine.update(last_t, d, m, reading)
-            dh, dw = res.density.shape
             q = float(np.quantile(res.density, 0.999)) if res.density.size else 0.0
             heat_vmax = 0.9 * heat_vmax + 0.1 * max(q, 0.01)
             layers = Layers(density=res.density, mask=res.mask, flow=flow, flow_valid=valid, zones=zones,
-                            hot_cells=d.hot_cells, cell_frac=(cell / dw, cell / dh),
+                            wrong=wrong,
                             alert_active=bool(self.engine.active()), heat_vmax=heat_vmax,
                             anomaly_cells=None if reading is None else reading.cells,
                             anomaly_limit=None if reading is None else reading.limit)
             for a in alerts:
                 evidence = render(frame, layers, "overlay", s.stream_width)
                 self._latest_event_id = self.recorder.on_alert(a, evidence, self.source.label)
+                self._save_sample(self._latest_event_id, a, frame, res)
             self.store.add_sample(last_t, self.source.label, d, m, reading)
             self.recorder.tick(last_t)
 
             with self._lock:
-                self._layers = layers
+                newest_t = self._latest[0]
+            interval = 1 / self._analysis_rate.value if self._analysis_rate.value > 0 else time.perf_counter() - started
+            self.sync.add_layers(last_t, layers, newest_t, interval)
             self._density, self._motion, self._last_sample_t = d, m, last_t
             self._analysis_ms = (time.perf_counter() - started) * 1000
             self._analysis_rate.tick(time.monotonic())
             n_done += 1
-            if n_done == AUTO_CALIB_AFTER and not self.engine.calibrated and not self.engine.learning:
+            if n_done == AUTO_CALIB_AFTER and not self.monitor.ready and not self.monitor.learning:
                 self.calibrate(s.calib_seconds)
+
+    @staticmethod
+    def _check_directions(d: DensityStats, zones: ZoneSet, flow: np.ndarray, valid: np.ndarray) -> np.ndarray | None:
+        """Ghi phần đi ngược chiều vào từng vùng có đặt chiều; trả mask các điểm đi ngược để vẽ."""
+        if not any(z.direction is not None for z in d.zones):
+            return None
+        wrong_all = np.zeros(valid.shape, bool)
+        for z, area in zip(d.zones, zones.zone_masks(*valid.shape)):
+            if z.direction is not None:
+                z.wrong_share, wrong = wrong_way(flow, area & valid, z.direction)
+                wrong_all |= wrong
+        return wrong_all
 
     def _motion_stats(self, t: float, res, zones: ZoneSet):
         s = self.settings

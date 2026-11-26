@@ -48,7 +48,7 @@ def test_create_start_and_persist_config_changes(manager):
     from crowd_demo.zones import ZoneSet
     p.set_zones(ZoneSet([[(0, 0), (1, 0), (1, 1)]], [], [{"name": "Sảnh", "limit": 10}]))
     cfg = manager.db.get_camera(cid)["config"]
-    assert cfg["view_mode"] == "gray" and cfg["zones"]["roi_meta"] == [{"name": "Sảnh", "limit": 10.0}]
+    assert cfg["view_mode"] == "gray" and cfg["zones"]["roi_meta"] == [{"name": "Sảnh", "limit": 10.0, "direction": None}]
     manager.stop(cid)
     manager.start(cid)                                  # bật lại: dùng cấu hình đã lưu
     assert manager.get(cid).mode == "gray" and manager.get(cid).zones.meta(0)["name"] == "Sảnh"

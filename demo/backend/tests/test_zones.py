@@ -33,8 +33,8 @@ def test_dict_roundtrip():
 
 def test_zone_names_and_limits_roundtrip_and_defaults():
     z = ZoneSet.from_dict({"roi": [FULL, LEFT], "exclude": [], "roi_meta": [{"name": "Cổng A", "limit": 30}]})
-    assert z.meta(0) == {"name": "Cổng A", "limit": 30.0}
-    assert z.meta(1) == {"name": "Vùng 2", "limit": None}            # thiếu thông tin: tên mặc định, không giới hạn
+    assert z.meta(0) == {"name": "Cổng A", "limit": 30.0, "direction": None}
+    assert z.meta(1) == {"name": "Vùng 2", "limit": None, "direction": None}            # thiếu thông tin: tên mặc định, không giới hạn
     assert ZoneSet.from_dict(z.to_dict()).to_dict() == z.to_dict()
 
 

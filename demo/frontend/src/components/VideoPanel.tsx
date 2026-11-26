@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../api'
-import { duration } from '../format'
+import { RULE_LABELS, duration } from '../format'
 import type { Point, Polygon, Status, ViewMode, ZoneSet } from '../types'
 import { Icon } from './Icon'
 
@@ -8,17 +8,20 @@ export type ZoneTool = 'roi' | 'exclude'
 
 const MODES: { value: ViewMode; label: string }[] = [
   { value: 'video', label: 'Video' },
-  { value: 'overlay', label: 'Video + nhận diện' },
+  { value: 'overlay', label: 'Nhận diện' },
   { value: 'gray', label: 'Nền xám' },
-  { value: 'overlay_only', label: 'Chỉ lớp nhận diện' },
+  { value: 'overlay_only', label: 'Chỉ lớp phủ' },
 ]
 const COLORS = { roi: '#22C55E', exclude: '#EF4444', draft: '#F59E0B' }
 const CLOSE_RADIUS = 12
 
 /** Khung video trung tâm: luồng MJPEG đã vẽ lớp nhận diện, chế độ hiển thị, vẽ vùng và điều khiển phát. */
-export function VideoPanel({ status, canEdit, draft, tool, onDraft, onTool, onStartEdit, onSave, onCancel, zoneError }: {
+export function VideoPanel({ starting, status, canEdit, configOpen, onConfig, draft, tool, onDraft, onTool, onStartEdit, onSave, onCancel, zoneError }: {
+  starting: string | null      // tên camera đang được bật (đang mở nguồn)
   status: Status | null
   canEdit: boolean
+  configOpen: boolean
+  onConfig: () => void
   draft: ZoneSet | null
   tool: ZoneTool
   onDraft: (z: ZoneSet) => void
@@ -32,6 +35,7 @@ export function VideoPanel({ status, canEdit, draft, tool, onDraft, onTool, onSt
   const alerting = (status?.active_alerts.length ?? 0) > 0
   const frame = useRef<HTMLDivElement>(null)
   const [full, setFull] = useState(false)
+  const [shownRun, setShownRun] = useState<string | null>(null)     // lần chạy đã nhận được khung hình đầu tiên
 
   useEffect(() => {
     const onChange = () => setFull(document.fullscreenElement === frame.current)
@@ -66,6 +70,11 @@ export function VideoPanel({ status, canEdit, draft, tool, onDraft, onTool, onSt
           ))}
         </div>
         <div className="spacer" />
+        {src && status && (
+          <span className="muted small" title="Video được phát trễ để lớp phủ khớp với hình">
+            Video trễ {(status.perf.delay_ms / 1000).toFixed(1)} s
+          </span>
+        )}
         {draft ? (
           <>
             <div className="segmented" role="radiogroup" aria-label="Loại vùng">
@@ -85,6 +94,11 @@ export function VideoPanel({ status, canEdit, draft, tool, onDraft, onTool, onSt
         ) : (
           canEdit && <button className="btn" disabled={!src} onClick={onStartEdit}><Icon name="zone" size={14} /> Vẽ vùng</button>
         )}
+        {!draft && (
+          <button className={`btn ${configOpen ? 'btn-on' : ''}`} disabled={!src} onClick={onConfig} aria-expanded={configOpen}>
+            <Icon name="sliders" size={14} /> Cấu hình
+          </button>
+        )}
         <button className="btn btn-icon" disabled={!src} onClick={toggleFull}
           aria-label={full ? 'Thoát toàn màn hình (F)' : 'Toàn màn hình (F)'} title={full ? 'Thoát toàn màn hình (F)' : 'Toàn màn hình (F)'}>
           <Icon name={full ? 'shrink' : 'expand'} />
@@ -97,11 +111,15 @@ export function VideoPanel({ status, canEdit, draft, tool, onDraft, onTool, onSt
             style={{ '--ar': `${src.size[0]} / ${src.size[1]}` } as React.CSSProperties}
             onDoubleClick={draft ? undefined : toggleFull}>
             {/* đổi key khi đổi lần chạy để trình duyệt mở lại luồng */}
-            <img key={src.run} src={api.streamUrl(status!.camera_id, src.run)} alt={`Video giám sát: ${src.label}`} draggable={false} />
+            <img key={src.run} src={api.streamUrl(status!.camera_id, src.run)} alt={`Video giám sát: ${src.label}`} draggable={false}
+              onLoad={() => setShownRun(src.run)} />
+            {shownRun !== src.run && status!.state !== 'error' && (
+              <Loading text="Đang chờ hình đầu tiên…" note="Video được phát trễ vài giây để lớp phủ khớp với hình." />
+            )}
             {draft && <ZoneCanvas zones={draft} tool={tool} onChange={onDraft} />}
             {full && alerting && (
               <div className="stage-alert" role="status">
-                <Icon name="alert" size={16} /> Đang cảnh báo · điểm bất thường {status?.anomaly.score?.toFixed(3) ?? '–'}
+                <Icon name="alert" size={16} /> Đang cảnh báo · {status!.active_alerts.map((r) => RULE_LABELS[r]).join(', ')}
               </div>
             )}
             {status?.anomaly.learning && (
@@ -110,19 +128,31 @@ export function VideoPanel({ status, canEdit, draft, tool, onDraft, onTool, onSt
               </div>
             )}
           </div>
+        ) : starting ? (
+          <Loading text={`Đang bật camera "${starting}"…`} note="Đang mở nguồn video. Livestream YouTube có thể mất lâu hơn." />
         ) : (
           <div className="stage-empty">
             <Icon name="video" size={40} />
             <p>Chưa có camera nào đang chạy.</p>
-            <p className="muted small">Bật camera ở dải camera phía trên, hoặc thêm camera ở trang "Camera".</p>
+            <p className="muted small">Bật camera ở thanh phía trên, hoặc bấm "Thêm" để thêm camera mới.</p>
           </div>
         )}
       </div>
 
-      {draft && <p className="hint">Click để thêm điểm · double-click hoặc click lại điểm đầu để đóng vùng · Esc hủy vùng đang vẽ · click phải lên vùng để xóa. Đặt tên và sức chứa ở bảng "Vùng giám sát".</p>}
+      {draft && <p className="hint">Click để thêm điểm · double-click hoặc click lại điểm đầu để đóng vùng · Esc hủy vùng đang vẽ · click phải lên vùng để xóa. Đặt tên, sức chứa và chiều đi ở bảng "Vùng giám sát" bên phải.</p>}
       {zoneError && <p className="error" role="alert">{zoneError}</p>}
       {src && !src.live && <PlaybackBar status={status!} />}
     </section>
+  )
+}
+
+function Loading({ text, note }: { text: string; note: string }) {
+  return (
+    <div className="stage-loading" role="status">
+      <span className="spinner" aria-hidden="true" />
+      <p>{text}</p>
+      <p className="muted small">{note}</p>
+    </div>
   )
 }
 

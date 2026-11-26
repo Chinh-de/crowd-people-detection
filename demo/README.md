@@ -8,8 +8,8 @@ Demo đáp ứng các mục sau trong đề tài:
 |---|---|
 | 3.1 Pipeline thời gian thực, lưu chuỗi thời gian | Hai luồng xử lý; bảng `samples` trong SQLite |
 | 3.2 Heatmap mật độ trên khung hình | Chế độ hiển thị "Video + nhận diện", "Nền xám + nhận diện" |
-| 3.3 Bất thường theo mật độ, ROI | Luật quá đông, vượt sức chứa từng vùng, ô quá dày, tăng đột ngột; vẽ vùng giám sát (có tên, sức chứa) và vùng loại trừ trên web |
-| 3.4 Bất thường theo chuyển động | Farneback; mô hình phát hiện bất thường (ngưỡng tốc độ, Isolation Forest, autoencoder UMN); luật ngược chiều |
+| 3.3 Bất thường theo mật độ, ROI | Cảnh báo vượt sức chứa (vùng, toàn khung) và tăng đột ngột; vẽ vùng giám sát (tên, sức chứa, chiều đi) và vùng loại trừ trên web |
+| 3.4 Bất thường theo chuyển động | Farneback; mô hình phát hiện bất thường (ngưỡng tốc độ, Isolation Forest, autoencoder UMN); đi ngược chiều quy định |
 | 4.1 Cơ sở dữ liệu | SQLite: `samples`, `events` |
 | 4.2 Dashboard | Video kèm lớp nhận diện, biểu đồ, danh sách cảnh báo có ảnh và clip |
 | 5.3 Hiệu năng | FPS video, số lần phân tích mỗi giây, thời gian mỗi lần phân tích hiển thị trực tiếp |
@@ -42,9 +42,9 @@ Mô hình phát hiện bất thường (giai đoạn 2) nằm ở `demo/models/a
 | `ae_umn_scene2.pth` + `_norm.npz` | như trên, bối cảnh trong nhà |
 | `ae_umn_scene3.pth` + `_norm.npz` | như trên, bối cảnh quảng trường |
 
-Ngưỡng tốc độ và các biến thể Isolation Forest không cần file: chúng tự học trên camera trong lúc "học mức bình thường".
+Ngưỡng tốc độ và Isolation Forest không cần file: chúng tự học trên camera trong lúc "học mức bình thường".
 
-Đổi mô hình của cả hai giai đoạn ngay trên web, thẻ **Mô hình** ở cột trái. Đổi mô hình đếm thì học lại mức bình thường; đổi mô hình bất thường thì học lại ngay từ các mẫu đã thu, không phải chờ. Muốn dùng thư mục khác thì đặt `CROWD_MODELS=đường/dẫn/thư_mục`. Loader tự nhận biết nhánh mask và ASPP từ checkpoint.
+Đổi mô hình của cả hai giai đoạn ngay trên web, nút **Cấu hình** → **Mô hình**. Đổi mô hình đếm thì mô hình bất thường học lại; đổi mô hình bất thường thì học lại ngay từ các mẫu đã thu, không phải chờ. Muốn dùng thư mục khác thì đặt `CROWD_MODELS=đường/dẫn/thư_mục`. Loader tự nhận biết nhánh mask và ASPP từ checkpoint.
 
 Video thử `data/videos/umn.avi` (tập UMN, 11 clip hoảng loạn ở 3 bối cảnh) để xem phát hiện bất thường. Vùng chữ đỏ "Abnormal Crowd Activity" của video đã được đặt sẵn làm vùng loại trừ (`data/zones/umn.avi.json`), để mô hình không đọc được nhãn. Học mức bình thường khoảng 12 giây đầu mỗi bối cảnh, trước lúc mọi người bỏ chạy.
 
@@ -77,16 +77,27 @@ Chạy test backend: `cd demo/backend && uv run pytest`.
    - Bấm Esc để hủy vùng đang vẽ; click phải vào một vùng để xóa vùng đó.
    - Bấm "Lưu vùng" để lưu. Vùng được nhớ theo từng nguồn, lưu ở `data/zones/`.
    - *Vùng giám sát* là nơi đếm người. *Vùng loại trừ* bị bỏ qua, ví dụ biển quảng cáo, màn hình, đèn trang trí mà mô hình hay nhầm là người.
-   - Mỗi vùng giám sát có **tên** và **sức chứa** riêng, sửa ở thẻ "Vùng giám sát" bên phải. Số người trong vùng vượt sức chứa thì có cảnh báo "Vượt sức chứa vùng", áp dụng ngay, không cần học.
+   - Mỗi vùng giám sát có **tên** và **sức chứa** riêng, sửa ở bảng "Vùng giám sát" bên phải (hoặc mục "Vùng" trong "Cấu hình"). Số người trong vùng vượt sức chứa thì có cảnh báo "Vượt sức chứa", áp dụng ngay, không cần học. Lối một chiều thì chọn thêm **chiều đi** cho phép.
 4. **Học mức bình thường**
    - Sau vài giây chạy, hệ thống tự học trong 5 phút đầu. Có thể nhập số giây rồi bấm "Học lại" vào lúc cảnh đang bình thường.
-   - Trong lúc học, chỉ ngưỡng **sức chứa tối đa** do người dùng đặt có hiệu lực.
-5. **Chọn mô hình** (thẻ "Mô hình" ở cột trái), kèm kết quả nghiên cứu của từng mô hình:
-   - Giai đoạn 1, đếm người: MobileCount + Mask hoặc baseline (MAE / MSE trên ShanghaiTech B).
-   - Giai đoạn 2, phát hiện bất thường: ngưỡng tốc độ, 3 biến thể Isolation Forest, 3 autoencoder UMN (AUC trên UMN). Với autoencoder chọn thêm cách chuẩn hóa: theo camera, hoặc gốc UMN (chỉ hợp với video UMN).
+   - Chỉ cảnh báo bất thường chuyển động cần học; các cảnh báo còn lại áp dụng ngay.
+5. **Chọn mô hình** (nút "Cấu hình" → mục "Mô hình"), kèm kết quả nghiên cứu của mô hình đang chọn:
+   - Giai đoạn 1, đếm người: MobileCount + Mask, baseline, hoặc bản tinh chỉnh Dublin (MAE / MSE trên ShanghaiTech B; MAE trên camera Dublin).
+   - Giai đoạn 2, phát hiện bất thường: ngưỡng tốc độ, Isolation Forest flow + mask + mật độ, 3 autoencoder UMN (AUC trên UMN). Với autoencoder chọn thêm cách chuẩn hóa: theo camera, hoặc gốc UMN (chỉ hợp với video UMN).
 6. **Cảnh báo**
    - Khung video chuyển viền đỏ, luật đang kích hoạt được tô đỏ.
    - Danh sách cảnh báo có ảnh bằng chứng. Click vào một cảnh báo để xem clip khoảng 5 giây trước và 5 giây sau sự kiện.
+7. **Gắn nhãn** (trang "Gắn nhãn", chỉ quản trị): sửa điểm đầu người của bộ ảnh `data/labels/dublin_live/`.
+   - "Chụp khung": lưu khung hiện tại của một camera đang chạy thành ảnh cần gắn nhãn.
+   - "Tạo nhãn nháp": đặt điểm bằng mô hình (ưu tiên bản tinh chỉnh Dublin). Nháp có thể thiếu nhiều điểm, cần soát lại.
+   - "Xuất dataset": tải file zip 960×540 cho notebook `finetune_dublin.ipynb`.
+8. **Phân loại cảnh báo để lưu mẫu fine-tune:** mỗi cảnh báo tự lưu một mẫu ở `data/samples/<id>/`:
+   ảnh gốc, mask, bản đồ mật độ, nhãn điểm nháp, đặc trưng chuyển động và ảnh xem trước.
+   - Quản trị phân loại "Đúng" hoặc "Báo nhầm" trong chi tiết cảnh báo; trang Lịch sử xem lại theo phân loại.
+   - "Gửi sang Gắn nhãn" để sửa điểm cho mô hình đếm; "Xuất mẫu đã phân loại" tải zip kèm `manifest.csv`.
+   - Hệ thống chỉ lưu mẫu, **không tự học**; train lại làm riêng. Mẫu chưa phân loại bị xóa cùng thời hạn với clip.
+
+Video được phát trễ vài giây để lớp phủ khớp với hình; độ trễ hiện trên khung video.
 
 ## Kiến trúc
 
@@ -101,7 +112,7 @@ Nguồn (file / YouTube HLS)
         → đếm theo vùng và ô lưới (density.py)
         → optical flow Farneback giữa frame hiện tại và frame ~0,2 s trước (motion.py)
         → đặc trưng lưới 8×8 (anomaly.py) → mô hình bất thường đang chọn → điểm bất thường
-        → 6 luật (rules.py) → cảnh báo → ảnh + clip (evidence.py) → SQLite (storage.py)
+        → 4 cảnh báo (rules.py) → cảnh báo → ảnh + clip (evidence.py) → SQLite (storage.py)
         → cập nhật lớp phủ (overlay.py)
 
 Trình duyệt: <img> MJPEG + canvas vẽ vùng; WebSocket /api/ws (trạng thái 2 lần/giây); REST để cấu hình
@@ -118,7 +129,7 @@ Video không phải chờ mô hình: lớp phủ chỉ cập nhật sau mỗi l�
 | `density.py` | Đếm theo vùng, tổng theo ô lưới, ô quá dày |
 | `motion.py` | Farneback, các đặc trưng chuyển động |
 | `anomaly.py` | Giai đoạn 2: đặc trưng lưới 8×8, ngưỡng tốc độ, Isolation Forest, autoencoder UMN |
-| `rules.py` | Học mức bình thường, 6 luật cảnh báo |
+| `rules.py` | 4 cảnh báo |
 | `overlay.py` | Vẽ lớp nhận diện theo 4 chế độ |
 | `storage.py` | SQLite |
 | `evidence.py` | Bộ đệm frame, ảnh và clip H.264 |
@@ -159,29 +170,15 @@ Video không phải chờ mô hình: lớp phủ chỉ cập nhật sau mỗi l�
 - **Mức hỗn loạn:** entropy của histogram 16 hướng, có trọng số theo độ dài vector, chuẩn hóa về 0–1. Bằng 0 khi mọi người đi cùng một hướng, bằng 1 khi hướng trải đều ra mọi phía.
 - **Ngược chiều:** tỉ lệ (theo độ dài vector) các vector lệch hơn 120° so với hướng chính.
 
-**Học mức bình thường.** Trong N giây (mặc định 5 phút), hệ thống ghi lại các số đo rồi lấy trung vị *m* và độ lệch bền *σ = 1,4826 × MAD* (MAD là trung vị độ lệch tuyệt đối) cho từng đại lượng. Nhờ vậy ngưỡng tự khớp với từng camera và từng khung cảnh. Sau khi học xong, mức nền được tính lại mỗi 30 s theo 15 phút gần nhất, để theo kịp nhịp phố thay đổi trong ngày (phố đông dần lên vào buổi tối). Đổi lại, một đám đông tích tụ rất chậm (hơn 7–8 phút) sẽ thành "bình thường"; giới hạn cứng cho trường hợp này là ô **sức chứa tối đa**.
+**Bốn cảnh báo.** Bất thường chuyển động phải đúng liên tục **2 giây** (chỉnh bằng "độ nhạy"); các cảnh báo khác **6 giây**. Mỗi đợt chỉ báo một lần, hai cảnh báo cùng loại cách nhau ít nhất **60 giây**. Số người làm mượt bằng trung vị 3 mẫu.
 
-**Phát hiện bất thường chuyển động (giai đoạn 2).** Mỗi lần phân tích, khung được chia lưới 8×8 ô, giống hệt notebook `anomaly_umn.ipynb`. Mỗi ô có 11 kênh chuyển động (tốc độ, histogram 8 hướng, entropy hướng, độ đồng hướng; có trọng số theo mask người) và 2 kênh mật độ (số người, tỉ lệ có người). Tốc độ đổi về đơn vị của UMN (pixel mỗi khung 1/30 s ở ảnh rộng 320). Frame nhỏ chỉ được phóng tối đa 2 lần trước khi đếm, vì phóng video 320 px lên 960 px làm đầu người quá to, mô hình đếm gần như bằng 0.
-- *Ngưỡng tốc độ:* tốc độ trung bình của người.
-- *Isolation Forest:* véc-tơ khung (trung bình, max, độ lệch chuẩn qua 64 ô) với 3 mức thông tin: flow, flow + mask, flow + mask + mật độ. Học tại chỗ.
-- *Autoencoder UMN:* cửa sổ 16 mẫu liên tiếp, điểm là trung bình sai số dựng lại của 3 ô lớn nhất; ô vượt ngưỡng được tô viền cam trên video. Lưu ý: ở tốc độ phân tích trên CPU, 16 mẫu kéo dài vài giây thay vì 0,5 s như lúc train, nên kém ổn định hơn Isolation Forest.
+| Cảnh báo | Báo khi | Cần học |
+|---|---|---|
+| Bất thường chuyển động | điểm của mô hình giai đoạn 2 vượt ngưỡng học từ chính camera | có |
+| Vượt sức chứa | số người trong một vùng, hoặc toàn khung, lớn hơn sức chứa người vận hành đặt | không |
+| Tăng đột ngột | trong 60 giây tăng hơn max(10 người; 50% số cũ) | không |
+| Đi ngược chiều | ở vùng đã chọn chiều đi, phần chuyển động lệch hơn 120° so với chiều đó vượt 40% (chỉnh được); bỏ qua khi quá ít chuyển động | không |
 
-Điểm được làm mượt bằng trung bình 3 mẫu. Ngưỡng học từ điểm (đã làm mượt) trên dữ liệu bình thường của chính camera: max(phân vị 99%, trung vị + 4σ); riêng Isolation Forest là trung vị + 3σ, vì điểm của Isolation Forest bị chặn trên (khung nằm ngoài vùng dữ liệu học chỉ nhận điểm ngang các khung học ở rìa, nên gần như không bao giờ vượt phân vị 99% của chính dữ liệu học).
-
-Thử trên `umn.avi`, bối cảnh bãi cỏ, học 12 giây đầu: Isolation Forest (flow + mask + mật độ) báo ở giây 20,3 và ngưỡng tốc độ báo ở giây 19,1; theo nhãn, đoạn hoảng loạn là giây 17,5 đến 20,5. Khi video chuyển sang bối cảnh khác, phải học lại.
-
-**Sáu luật.** Luật bất thường chuyển động chỉ cần đúng liên tục **2 giây** (hoảng loạn trên UMN chỉ kéo dài vài giây); các luật khác phải đúng **liên tục 6 giây** mới cảnh báo (tính theo giây, không theo số lần phân tích, nên không phụ thuộc tốc độ máy). Mỗi đợt chỉ báo một lần, và hai cảnh báo cùng loại cách nhau ít nhất **60 giây**. Số người được làm mượt bằng trung vị 3 mẫu.
-
-| Luật | Điều kiện |
-|---|---|
-| Quá đông | số người > *m* + max(3σ; 30%·*m*; 5 người); hoặc > sức chứa tối đa do người dùng đặt |
-| Ô quá dày | ô lưới (64×64 px) đông nhất > max(4; 1,3 × phân vị 95 của lúc bình thường) |
-| Tăng đột ngột | số người hiện tại − trung vị của khoảng [t − 60 s, t − 20 s] > max(10 người; 50%) |
-| Vượt sức chứa vùng | số người trong một vùng có tên > sức chứa người vận hành đặt cho vùng đó |
-| Bất thường chuyển động | điểm của mô hình giai đoạn 2 đang chọn > ngưỡng học từ camera |
-| Ngược chiều | tỉ lệ ngược chiều > max(30%; *m* + 4·max(σ; 0,05)) |
-
-Các mức sàn (5 người, 4 người/ô, 30%...) để lúc cảnh vắng hoặc đứng yên (σ ≈ 0) ngưỡng không bị kéo sát mức hiện tại. Trên giao diện, thẻ "Luật cảnh báo" có công tắc bật/tắt từng luật, ngưỡng đang dùng, và luật đang kích hoạt được tô đỏ.
 
 ## Hiệu năng (máy thử)
 
@@ -208,7 +205,6 @@ Các mức sàn (5 người, 4 người/ô, 30%...) để lúc cảnh vắng ho�
 - **Autoencoder** trên chuỗi đặc trưng chuyển động: học từ dữ liệu bình thường, báo bất thường khi lỗi tái tạo cao. Cách này bắt được những dạng bất thường chưa có luật.
 - **RAFT** thay cho Farneback khi cần optical flow chính xác hơn (cần GPU để chạy thời gian thực).
 - **Hiệu chỉnh phối cảnh:** đổi số người mỗi ô thành người/m², và tốc độ thành m/s.
-- **Hướng đi quy định cho từng vùng giám sát:** luật ngược chiều so với hướng do người vận hành đặt, thay vì so với hướng chính.
 - **Đánh giá định lượng:** độ trễ và AUC trên dataset UMN (cảnh chạy tán loạn); MAE trên frame camera thật đã gán nhãn; tỉ lệ báo nhầm mỗi giờ trên bản ghi dài.
 - **Thông báo** qua email hoặc Telegram khi có cảnh báo nghiêm trọng.
 - **Nhiều camera** trên một dashboard; **dự đoán nguy cơ quá tải** từ xu hướng số người.

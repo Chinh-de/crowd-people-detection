@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-RULE_NAMES = ("overcrowd", "zone_limit", "hot_cell", "surge", "panic", "counterflow")
+RULE_NAMES = ("zone_limit", "surge", "panic", "counterflow")
 
 
 @dataclass
@@ -18,6 +18,8 @@ class ZoneCount:
     name: str
     count: float
     limit: float | None            # sức chứa do người vận hành đặt; None = không giới hạn
+    direction: float | None = None    # chiều đi cho phép (độ, 0 = sang phải, 90 = xuống); None = hai chiều
+    wrong_share: float | None = None  # phần chuyển động đi ngược chiều; None = không đủ chuyển động để xét
 
 
 @dataclass
@@ -26,7 +28,6 @@ class DensityStats:
     roi: float
     excluded: float
     cells: np.ndarray
-    hot_cells: list[tuple[int, int]] = field(default_factory=list)
     max_cell: float = 0.0
     zones: list[ZoneCount] = field(default_factory=list)
 

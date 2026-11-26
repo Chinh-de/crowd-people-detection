@@ -1,6 +1,6 @@
 // Các lời gọi REST tới backend. Lỗi HTTP được ném thành Error với thông điệp tiếng Việt của server.
 // Phiên hết hạn (401) phát sự kiện 'crowd:unauthorized' để ứng dụng quay về trang đăng nhập.
-import type {
+import type { Verdict,
   AnomalyModels, AuditRow, Camera, CameraSummary, CountModelInfo, EventPage, EventRow, Me, RuleConfig, SeriesRow,
   StatsResponse, Status, ViewMode, ZoneSet,
 } from './types'
@@ -24,7 +24,7 @@ const json = (method: string, body: unknown): RequestInit => ({
 
 const cam = (id: number) => `/api/cameras/${id}`
 
-export type EventFilter = { camera_id?: number; rule?: string; status?: string; t0?: number; t1?: number }
+export type EventFilter = { camera_id?: number; rule?: string; status?: string; verdict?: string; t0?: number; t1?: number }
 
 const qs = (o: Record<string, string | number | undefined | null>) =>
   new URLSearchParams(Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== '')
@@ -74,6 +74,11 @@ export const api = {
   eventsCsvUrl: (f: EventFilter) => `/api/events.csv?${qs(f)}`,
   eventContext: (id: number) => request<{ event: EventRow; series: SeriesRow[] }>(`/api/events/${id}/context`),
   ackEvent: (id: number, note: string) => request<EventRow>(`/api/events/${id}/ack`, json('POST', { note })),
+  setVerdict: (id: number, verdict: Verdict | null, note: string) =>
+    request<EventRow>(`/api/events/${id}/verdict`, json('POST', { verdict, note })),
+  sampleUrl: (id: number, name: 'preview.jpg' | 'frame.jpg' | 'mask.png') => `/api/events/${id}/sample/${name}`,
+  toLabeling: (id: number) => request<{ image: string }>(`/api/events/${id}/to-labeling`, { method: 'POST' }),
+  feedbackExportUrl: '/api/feedback/export',
   stats: (t0: number, t1: number, camera_id?: number) => request<StatsResponse>(`/api/stats?${qs({ t0, t1, camera_id })}`),
   audit: (limit = 100, offset = 0) => request<AuditRow[]>(`/api/audit?limit=${limit}&offset=${offset}`),
 }

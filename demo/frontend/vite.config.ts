@@ -10,6 +10,7 @@ export default defineConfig({
     proxy: {
       '/api': { target: backend, ws: true },
       '/evidence': backend,
+      '/labeling': backend,
     },
   },
 })

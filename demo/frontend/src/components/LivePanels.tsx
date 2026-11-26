@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { RULE_LABELS, clock, num } from '../format'
+import { DIRECTIONS, RULE_LABELS, VERDICT_LABELS, anomalyState, clock, num } from '../format'
 import type { EventRow, Status, ZoneMeta, ZoneSet } from '../types'
 import { EventModal } from './EventModal'
 import { Icon } from './Icon'
@@ -8,31 +8,35 @@ import { Icon } from './Icon'
 export function KpiCard({ status }: { status: Status }) {
   const c = status.counts
   const a = status.anomaly
-  const ratio = a.score != null && a.limit ? a.score / a.limit : null
-  const over = ratio != null && ratio > 1
+  const state = anomalyState(a)
+  const over = state.key === 'abnormal'
   return (
     <section className="card kpi-card" aria-label="Chỉ số trực tiếp">
       <div className="kpi">
-        <span className="kpi-label"><Icon name="users" size={14} /> Người trong vùng theo dõi</span>
+        <span className="kpi-label"><Icon name="users" size={14} /> Số người</span>
         <span className="kpi-value mono">{num(c.roi)}</span>
-        <span className="kpi-sub muted">toàn khung {num(c.total)} · loại trừ {num(c.excluded)} · ô đông nhất {num(c.max_cell, 1)}</span>
+        <span className="kpi-sub muted" title={`loại trừ ${num(c.excluded)} · ô đông nhất ${num(c.max_cell, 1)}`}>toàn khung {num(c.total)}</span>
       </div>
       <div className={`kpi ${over ? 'kpi-alert' : ''}`}>
-        <span className="kpi-label"><Icon name="activity" size={14} /> Điểm bất thường</span>
-        <span className="kpi-value mono">{a.score == null ? '–' : num(a.score, 3)}</span>
-        <div className="meter" aria-hidden="true">
-          <span className="meter-fill" style={{ width: `${Math.min(1.5, ratio ?? 0) / 1.5 * 100}%` }} />
-          <span className="meter-limit" style={{ left: `${100 / 1.5}%` }} />
-        </div>
-        <span className="kpi-sub muted">
-          {a.learning ? `đang học ${a.have}/${a.need}` : a.limit == null ? 'chưa học mức bình thường' : `ngưỡng ${num(a.limit, 3)} · ${a.label}`}
+        <span className="kpi-label"><Icon name="activity" size={14} /> Chuyển động</span>
+        <span className={`kpi-state state-${state.key}`}
+          title={a.score != null && a.limit != null ? `điểm ${num(a.score, 3)} · ngưỡng ${num(a.limit, 3)}` : undefined}>
+          {a.learning ? 'Đang học' : state.label}
         </span>
+        {a.learning ? (
+          <>
+            <progress max={Math.max(a.need, 1)} value={a.have} aria-label="Tiến độ học mức bình thường" />
+            <span className="kpi-sub muted">{a.have}/{a.need} mẫu bình thường</span>
+          </>
+        ) : (
+          <span className="kpi-sub muted">{state.key === 'none' ? 'cần học mức bình thường trước' : a.label}</span>
+        )}
       </div>
     </section>
   )
 }
 
-/** Vùng giám sát có tên: số người hiện tại so với sức chứa; sửa tên và sức chứa tại chỗ. */
+/** Vùng giám sát có tên: số người so với sức chứa, chiều đi cho phép; sửa tại chỗ. */
 export function ZonesCard({ status, zones, editing, canEdit, onChange, onSave }: {
   status: Status
   canEdit: boolean
@@ -58,7 +62,7 @@ export function ZonesCard({ status, zones, editing, canEdit, onChange, onSave }:
         {dirty && canEdit && <button className="btn btn-primary btn-sm" onClick={() => onSave({ ...zones, roi_meta: local })}>Lưu</button>}
       </header>
       {zones.roi.length === 0 ? (
-        <p className="muted small">Chưa có vùng: đang theo dõi cả khung hình. Bấm "Vẽ vùng" trên video để khoanh vùng và đặt sức chứa.</p>
+        <p className="muted small">Chưa có vùng: đang theo dõi cả khung hình. Bấm "Vẽ vùng" phía trên video để khoanh vùng và đặt sức chứa.</p>
       ) : (
         <ul className="zone-list">
           {zones.roi.map((_, i) => {
@@ -76,6 +80,17 @@ export function ZonesCard({ status, zones, editing, canEdit, onChange, onSave }:
                     aria-label={`Sức chứa ${meta.name}`}
                     onChange={(e) => setMeta(i, { limit: e.target.value === '' ? null : Number(e.target.value) })} />
                 </div>
+                <label className="zone-direction small muted">
+                  <span>Chiều đi</span>
+                  <select value={meta.direction ?? ''} disabled={!canEdit} aria-label={`Chiều đi cho phép của ${meta.name}`}
+                    onChange={(e) => setMeta(i, { direction: e.target.value === '' ? null : Number(e.target.value) })}>
+                    <option value="">hai chiều (không xét)</option>
+                    {DIRECTIONS.map((d) => <option key={d.value} value={d.value}>{d.label}</option>)}
+                  </select>
+                </label>
+                {live?.direction != null && live.wrong_share != null && (
+                  <span className="small muted">{num(live.wrong_share * 100)}% đang đi ngược</span>
+                )}
                 <div className="bar" aria-hidden="true">
                   <span style={{ width: `${Math.min(1, pct ?? 0) * 100}%` }} />
                 </div>
@@ -89,7 +104,9 @@ export function ZonesCard({ status, zones, editing, canEdit, onChange, onSave }:
 }
 
 /** Cảnh báo của camera đang xem: ảnh bằng chứng, giờ camera, trạng thái xử lý; bấm để xem chi tiết. */
-export function AlertsCard({ events, tz, onChanged }: { events: EventRow[]; tz: string; onChanged: () => void }) {
+export function AlertsCard({ events, tz, canJudge, onChanged }: {
+  events: EventRow[]; tz: string; canJudge: boolean; onChanged: () => void
+}) {
   const [open, setOpen] = useState<EventRow | null>(null)
   const pending = events.filter((e) => e.status === 'new').length
   return (
@@ -107,7 +124,8 @@ export function AlertsCard({ events, tz, onChanged }: { events: EventRow[]; tz: 
             <button className={`alert-item rule-${e.rule} ${e.status === 'ack' ? 'acked' : ''}`} onClick={() => setOpen(e)}>
               <img src={e.snapshot} alt="" loading="lazy" width={88} height={50} />
               <span className="alert-text">
-                <span className="alert-rule">{RULE_LABELS[e.rule]}</span>
+                <span className="alert-rule">{RULE_LABELS[e.rule]}
+                  {e.verdict && <span className={`verdict-tag v-${e.verdict}`}>{VERDICT_LABELS[e.verdict]}</span>}</span>
                 <span className="mono small muted">{clock(e.t, tz, true)}</span>
                 <span className="small">{e.message.replace(/^[^:]+:\s*/, '')}</span>
               </span>
@@ -118,7 +136,7 @@ export function AlertsCard({ events, tz, onChanged }: { events: EventRow[]; tz: 
           </li>
         ))}
       </ul>
-      {open && <EventModal event={open} tz={tz} onClose={() => setOpen(null)}
+      {open && <EventModal event={open} tz={tz} canJudge={canJudge} onClose={() => setOpen(null)}
         onAcked={(e) => { setOpen(e); onChanged() }} />}
     </section>
   )

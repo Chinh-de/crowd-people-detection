@@ -5,24 +5,30 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Chỉnh nhãn đầu người</title>
 <style>
-  :root { --bg:#11161e; --panel:#1a212c; --line:#2b3442; --text:#e6ebf2; --muted:#93a0b4; --accent:#3b82f6;
-          --auto:#9ca3af; --reviewed:#f59e0b; --done:#22c55e; }
+  :root { --bg:#0b1120; --panel:#0f172a; --line:#334155; --text:#f8fafc; --muted:#94a3b8; --accent:#22c55e;
+          --auto:#9ca3af; --reviewed:#f59e0b; --done:#22c55e; color-scheme: dark; }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 system-ui, "Segoe UI", sans-serif; height:100vh;
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.4 'Fira Sans', system-ui, 'Segoe UI', sans-serif; height:100vh;
          display:grid; grid-template-columns: 280px 1fr; grid-template-rows: auto 1fr; overflow:hidden; }
   header { grid-column: 1 / 3; display:flex; gap:16px; align-items:center; padding:8px 14px; background:var(--panel);
            border-bottom:1px solid var(--line); flex-wrap:wrap; }
   header b { font-size:15px; }
   .stat { color:var(--muted); }
   .stat strong { color:var(--text); font-size:16px; }
-  select, button, input, textarea { background:#0d1218; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; }
+  select, button, input, textarea { background:#1b2336; min-height:30px; color:var(--text); border:1px solid var(--line); border-radius:6px; padding:4px 8px; font:inherit; }
   button { cursor:pointer; } button:hover { border-color:var(--accent); }
-  button.on { background:var(--accent); border-color:var(--accent); }
+  button.on { background:var(--accent); border-color:var(--accent); color:#0f172a; font-weight:600; }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#0f172a; font-weight:600; }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  #app-tools { display:flex; gap:8px; align-items:center; margin-left:auto; }
+  #app-tools[hidden] { display:none; }
+  #camera { max-width:220px; }
+  :focus-visible { outline:2px solid #38bdf8; outline-offset:2px; }
   aside { background:var(--panel); border-right:1px solid var(--line); display:flex; flex-direction:column; min-height:0; }
   aside .tools { padding:8px; display:flex; gap:6px; align-items:center; border-bottom:1px solid var(--line); }
   #list { overflow:auto; flex:1; }
-  .item { display:flex; align-items:center; gap:8px; padding:5px 10px; cursor:pointer; border-bottom:1px solid #202836; font-size:12.5px; }
-  .item:hover { background:#222b38; } .item.sel { background:#263247; }
+  .item { display:flex; align-items:center; gap:8px; padding:5px 10px; cursor:pointer; border-bottom:1px solid #1b2336; font-size:12.5px; }
+  .item:hover { background:#1b2336; } .item.sel { background:#222c42; box-shadow: inset 3px 0 0 var(--accent); }
   .dot { width:9px; height:9px; border-radius:50%; flex:none; }
   .item .n { margin-left:auto; color:var(--muted); font-variant-numeric: tabular-nums; }
   .item .warn { color:#f87171; }
@@ -34,7 +40,11 @@
   #help[hidden] { display:none; }
   #help kbd { background:#222b38; border-radius:4px; padding:0 5px; color:var(--text); }
   #saved { font-size:12px; color:var(--muted); min-width:120px; white-space:nowrap; }
-  header { min-height:48px; }
+  header { min-height:48px; column-gap:12px; row-gap:6px; }
+  header > label { display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+  header #note { width:200px; height:30px; min-height:30px; resize:none; overflow:hidden; white-space:nowrap; }
+  header #radius { width:80px; min-height:0; padding:0; }
+  header #name { max-width:30ch; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -53,7 +63,13 @@
   <button id="ignoreBtn" title="Vẽ vùng bỏ qua (I)">Vùng bỏ qua</button>
   <button id="hideBtn" title="Ẩn/hiện điểm (H)">Ẩn điểm</button>
   <label class="stat">Cỡ điểm <input id="radius" type="range" min="2" max="14" value="5"></label>
-  <span id="saved"></span>
+  <span id="saved" role="status"></span>
+  <div id="app-tools" hidden>
+    <button id="prelabelBtn" title="Đặt điểm nháp bằng mô hình đếm người">Tạo nhãn nháp</button>
+    <select id="camera" aria-label="Camera để chụp khung"></select>
+    <button id="captureBtn" title="Lưu khung hiện tại của camera thành ảnh cần gắn nhãn">Chụp khung</button>
+    <button id="exportBtn" class="primary" title="Tải dataset 960×540 cho notebook fine-tune">Xuất dataset</button>
+  </div>
 </header>
 <aside>
   <div class="tools">
@@ -80,6 +96,8 @@
 </main>
 <script>
 const $ = id => document.getElementById(id);
+const EMBEDDED = location.pathname === '/labeling';          // chạy trong web chính; nếu không là công cụ riêng crowd-label
+const API = EMBEDDED ? '/api/labels' : '/api';
 const cv = $('cv'), ctx = cv.getContext('2d');
 const COLORS = { auto: '#9ca3af', reviewed: '#f59e0b', done: '#22c55e' };
 let items = [], idx = -1, img = new Image(), lab = null, view = { s: 1, tx: 0, ty: 0 };
@@ -91,7 +109,9 @@ const toImg = (x, y) => [(x - view.tx) / view.s, (y - view.ty) / view.s];
 const toScr = (x, y) => [x * view.s + view.tx, y * view.s + view.ty];
 
 async function loadItems() {
-  items = await (await fetch('/api/items')).json();
+  const res = await fetch(API + '/items');
+  if (!res.ok) { $('saved').textContent = 'Không tải được danh sách ảnh: hãy đăng nhập bằng tài khoản quản trị.'; return; }
+  items = await res.json();
   renderList();
   if (idx < 0 && items.length) open(Math.max(0, items.findIndex(i => i.status !== 'done')));
 }
@@ -120,7 +140,7 @@ async function open(i) {
   if (i < 0 || i >= items.length) return;
   await flush();
   idx = i; const it = items[i];
-  lab = await (await fetch('/api/label/' + encodeURIComponent(it.image))).json();
+  lab = await (await fetch(API + '/label/' + encodeURIComponent(it.image))).json();
   lab.ignore = lab.ignore || [];
   undo = []; draftPoly = [];
   $('name').textContent = it.image;
@@ -129,7 +149,7 @@ async function open(i) {
   $('note').value = lab.note || '';
   img = new Image();
   img.onload = () => { fit(); draw(); };
-  img.src = '/api/image/' + encodeURIComponent(it.image);
+  img.src = API + '/image/' + encodeURIComponent(it.image);
   renderList(); updateCount();
 }
 
@@ -183,7 +203,7 @@ async function flush() {
   if (!dirty || !lab) return;
   dirty = false;
   const it = items[idx];
-  const res = await fetch('/api/label/' + encodeURIComponent(it.image), {
+  const res = await fetch(API + '/label/' + encodeURIComponent(it.image), {
     method: 'PUT', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ points: lab.points, ignore: lab.ignore, status: lab.status, note: lab.note }) });
   $('saved').textContent = res.ok ? 'đã lưu ' + new Date().toLocaleTimeString() : 'LỖI LƯU';
@@ -287,6 +307,62 @@ $('radius').oninput = draw;
 $('help').onclick = () => { $('help').hidden = true; };
 $('filter').onchange = renderList;
 loadItems();
+
+// ---------- công cụ chỉ có trong web chính ----------
+async function call(url, init) {
+  const res = await fetch(url, init);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(typeof body.detail === 'string' ? body.detail : 'Lỗi ' + res.status);
+  return body;
+}
+
+if (EMBEDDED) {
+  $('app-tools').hidden = false;
+  const loadCameras = () => call('/api/cameras').then(cams => {
+    const keep = $('camera').value;
+    cams.sort((a, b) => b.running - a.running);             // camera đang chạy lên đầu, vì chỉ chụp được từ chúng
+    $('camera').replaceChildren(...cams.map(c => new Option(c.running ? c.name : c.name + ' (đang tắt)', c.id)));
+    if (keep && cams.some(c => c.running && String(c.id) === keep)) $('camera').value = keep;
+  }).catch(() => {});
+  loadCameras();
+  $('camera').addEventListener('focus', loadCameras);
+
+  $('captureBtn').onclick = async () => {
+    const opt = $('camera').selectedOptions[0];
+    if (!opt) return;
+    // bộ nhãn này dùng để fine-tune cho camera Temple Bar: hỏi lại để không trộn nhầm cảnh khác
+    if (!confirm(`Chụp một khung từ "${opt.text}" vào bộ nhãn Temple Bar?`)) return;
+    try {
+      await flush();
+      const { image } = await call(API + '/capture', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ camera_id: +opt.value }) });
+      $('filter').value = 'all';
+      idx = -2;                                  // không tự mở ảnh đầu tiên
+      await loadItems();
+      idx = -1;
+      await open(items.findIndex(i => i.image === image));
+    } catch (e) { alert(e.message); }
+  };
+
+  $('prelabelBtn').onclick = async () => {
+    if (!lab) return;
+    if (lab.points.length && !confirm(`Thay ${lab.points.length} điểm hiện có bằng nhãn nháp của mô hình? (Ctrl+Z để hoàn tác)`)) return;
+    const at = idx;
+    $('prelabelBtn').disabled = true;
+    try {
+      const out = await call(API + '/prelabel/' + encodeURIComponent(items[at].image), { method: 'POST' });
+      if (at !== idx) return;                    // người dùng đã chuyển ảnh khác trong lúc chờ
+      snapshot();
+      lab.points = out.points;
+      lab.status = 'auto'; $('status').value = 'auto';
+      $('auto').textContent = out.auto_count.toFixed(1);
+      changed();
+    } catch (e) { alert(e.message); }
+    finally { $('prelabelBtn').disabled = false; }
+  };
+
+  $('exportBtn').onclick = async () => { await flush(); location.href = API + '/export'; };
+}
 </script>
 </body>
 </html>

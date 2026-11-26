@@ -14,9 +14,10 @@ from .zones import ZoneSet, to_pixels
 ROI_COLOR = (80, 220, 80)          # BGR
 EXCLUDE_COLOR = (60, 60, 230)
 MASK_COLOR = (0, 215, 255)
-HOT_COLOR = (40, 40, 255)
+HOT_COLOR = (40, 40, 255)          # viền khung khi đang cảnh báo
 ANOMALY_COLOR = (0, 140, 255)      # cam: ô có sai số dựng lại vượt ngưỡng (autoencoder)
 ARROW_COLOR = (255, 255, 255)
+WRONG_COLOR = (40, 40, 255)        # đỏ: chuyển động đi ngược chiều cho phép
 ARROW_STEP = 24                    # khoảng cách lưới mũi tên flow, pixel ảnh đầu ra
 HEAT_MAX_ALPHA = 0.6
 EXCLUDE_SHADE = 0.35               # độ sáng còn lại của vùng loại trừ
@@ -29,8 +30,7 @@ class Layers:
     flow: np.ndarray | None = None               # (h, w, 2), đơn vị pixel của ảnh flow
     flow_valid: np.ndarray | None = None
     zones: ZoneSet = field(default_factory=ZoneSet)
-    hot_cells: list[tuple[int, int]] = field(default_factory=list)
-    cell_frac: tuple[float, float] = (0.0, 0.0)  # kích thước một ô lưới, tỉ lệ theo (rộng, cao) khung
+    wrong: np.ndarray | None = None              # bool cùng cỡ flow: điểm đi ngược chiều cho phép
     alert_active: bool = False
     heat_vmax: float = 0.05
     anomaly_cells: np.ndarray | None = None      # (8, 8) mức bất thường theo ô
@@ -82,7 +82,7 @@ def _paint(layers: Layers, h: int, w: int) -> _Paint:
         _draw_zones(lines, layers.zones)
         _draw_mask(lines, layers.mask)
         _draw_flow(lines, layers)
-        _draw_hot_cells(lines, layers)
+        _draw_directions(lines, layers.zones)
         _draw_anomaly_cells(lines, layers)
         exclude = layers.zones.masks(h, w)["exclude"] if layers.zones.exclude else None
         layers._painted[key] = _Paint(heat, alpha, exclude, lines, lines.any(axis=2))
@@ -125,20 +125,28 @@ def _draw_flow(img: np.ndarray, layers: Layers) -> None:
     for y in range(ARROW_STEP // 2, h, ARROW_STEP):
         for x in range(ARROW_STEP // 2, w, ARROW_STEP):
             fy, fx = min(int(y / sy), fh - 1), min(int(x / sx), fw - 1)
-            if layers.flow_valid is not None and not layers.flow_valid[fy, fx]:
+            wrong = layers.wrong is not None and bool(layers.wrong[fy, fx])
+            if not wrong and layers.flow_valid is not None and not layers.flow_valid[fy, fx]:
                 continue
             dx, dy = layers.flow[fy, fx]
             if dx * dx + dy * dy < 0.25:
                 continue
             end = (int(x + dx * sx * 3), int(y + dy * sy * 3))      # phóng 3 lần cho dễ nhìn
-            cv2.arrowedLine(img, (x, y), end, ARROW_COLOR, 1, cv2.LINE_AA, tipLength=0.35)
+            cv2.arrowedLine(img, (x, y), end, WRONG_COLOR if wrong else ARROW_COLOR, 2 if wrong else 1,
+                            cv2.LINE_AA, tipLength=0.35)
 
 
-def _draw_hot_cells(img: np.ndarray, layers: Layers) -> None:
+def _draw_directions(img: np.ndarray, zones: ZoneSet) -> None:
+    """Mũi tên xanh lớn giữa vùng: chiều đi cho phép."""
     h, w = img.shape[:2]
-    cw, ch = layers.cell_frac[0] * w, layers.cell_frac[1] * h
-    for r, c in layers.hot_cells:
-        cv2.rectangle(img, (int(c * cw), int(r * ch)), (int((c + 1) * cw), int((r + 1) * ch)), HOT_COLOR, 2)
+    for i, poly in enumerate(zones.roi):
+        deg = zones.meta(i)["direction"]
+        if deg is None:
+            continue
+        center = to_pixels(poly, w, h).mean(axis=0)
+        half = np.array([np.cos(np.radians(deg)), np.sin(np.radians(deg))]) * w * 0.05
+        start, end = (center - half).astype(int), (center + half).astype(int)
+        cv2.arrowedLine(img, tuple(map(int, start)), tuple(map(int, end)), ROI_COLOR, 5, cv2.LINE_AA, tipLength=0.4)
 
 
 def _draw_anomaly_cells(img: np.ndarray, layers: Layers) -> None:

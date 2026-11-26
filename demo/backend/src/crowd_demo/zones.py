@@ -1,6 +1,6 @@
 """Vùng giám sát (ROI) và vùng loại trừ. Tọa độ chuẩn hóa 0–1 nên không phụ thuộc độ phân giải.
 
-Mỗi vùng giám sát có thể đặt tên và sức chứa riêng (`roi_meta`): vượt sức chứa thì cảnh báo."""
+Mỗi vùng giám sát có thể đặt tên, sức chứa và chiều đi cho phép (`roi_meta`) để cảnh báo."""
 from dataclasses import dataclass, field
 
 import cv2
@@ -14,7 +14,7 @@ FULL_FRAME: Polygon = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
 class ZoneSet:
     roi: list[Polygon] = field(default_factory=list)
     exclude: list[Polygon] = field(default_factory=list)
-    roi_meta: list[dict] = field(default_factory=list)      # {"name": str, "limit": float | None} theo thứ tự roi
+    roi_meta: list[dict] = field(default_factory=list)      # {"name", "limit", "direction"} theo thứ tự roi
 
     def __post_init__(self):
         self._cache: dict[tuple[int, int], dict[str, np.ndarray]] = {}
@@ -22,8 +22,9 @@ class ZoneSet:
 
     def meta(self, i: int) -> dict:
         m = self.roi_meta[i] if i < len(self.roi_meta) else {}
-        limit = m.get("limit")
-        return {"name": str(m.get("name") or f"Vùng {i + 1}"), "limit": None if limit is None else float(limit)}
+        limit, direction = m.get("limit"), m.get("direction")
+        return {"name": str(m.get("name") or f"Vùng {i + 1}"), "limit": None if limit is None else float(limit),
+                "direction": None if direction is None else float(direction)}
 
     def validate(self) -> None:
         for kind, polys in (("vùng giám sát", self.roi), ("vùng loại trừ", self.exclude)):
@@ -36,6 +37,9 @@ class ZoneSet:
             limit = self.meta(i)["limit"]
             if limit is not None and limit < 0:
                 raise ValueError(f"Sức chứa của {self.meta(i)['name']} phải ≥ 0.")
+            direction = self.meta(i)["direction"]
+            if direction is not None and not 0 <= direction < 360:
+                raise ValueError(f"Chiều đi của {self.meta(i)['name']} phải từ 0 đến dưới 360 độ.")
 
     def masks(self, h: int, w: int) -> dict[str, np.ndarray]:
         """Mask bool kích thước (h, w): 'roi', 'exclude', 'watch' (= trong ROI và ngoài vùng loại trừ)."""

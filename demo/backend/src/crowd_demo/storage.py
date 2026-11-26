@@ -10,6 +10,7 @@ Bảng:
 `Store` là "góc nhìn" của một camera, giữ nguyên giao diện mà pipeline và bộ ghi bằng chứng đang dùng.
 """
 import json
+import shutil
 import sqlite3
 import threading
 import time
@@ -50,6 +51,9 @@ CREATE TABLE IF NOT EXISTS events (
 );
 CREATE INDEX IF NOT EXISTS idx_events_t ON events(t);
 CREATE INDEX IF NOT EXISTS idx_events_cam_t ON events(camera_id, t);
+CREATE TABLE IF NOT EXISTS users (
+    name TEXT PRIMARY KEY, salt TEXT NOT NULL, hash TEXT NOT NULL, role TEXT NOT NULL, created REAL NOT NULL
+);
 CREATE TABLE IF NOT EXISTS audit (
     id INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, user TEXT NOT NULL, action TEXT NOT NULL, detail TEXT
 );
@@ -65,6 +69,12 @@ class Database:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(SCHEMA)
+            have = {r[1] for r in self._db.execute("PRAGMA table_info(events)")}     # thêm cột cho CSDL cũ
+            for col, kind in (("has_sample", "INTEGER NOT NULL DEFAULT 0"), ("verdict", "TEXT"),
+                              ("verdict_by", "TEXT"), ("verdict_at", "REAL")):
+                if col not in have:
+                    self._db.execute(f"ALTER TABLE events ADD COLUMN {col} {kind}")
+            self._db.commit()
 
     def _q(self, sql: str, args=()) -> list[dict]:
         with self._lock:
@@ -194,8 +204,13 @@ class Database:
 
     def query_events(self, camera_id: int | None = None, rule: str | None = None, status: str | None = None,
                      t0: float | None = None, t1: float | None = None, limit: int = 50,
-                     offset: int = 0) -> tuple[list[dict], int]:
+                     offset: int = 0, verdict: str | None = None) -> tuple[list[dict], int]:
         where, args = [], []
+        if verdict == "none":
+            where.append("verdict IS NULL")
+        elif verdict is not None:
+            where.append("verdict = ?")
+            args.append(verdict)
         for col, op, v in (("camera_id", "=", camera_id), ("rule", "=", rule), ("status", "=", status),
                            ("t", ">=", t0), ("t", "<=", t1)):
             if v is not None:
@@ -210,6 +225,24 @@ class Database:
         return self._x("UPDATE events SET status = 'ack', ack_by = ?, ack_at = ?, note = ? WHERE id = ?",
                        (user, time.time(), note, event_id)) > 0
 
+    # ---------------------------------------------------------------- mẫu học liên tục
+    def mark_sample(self, event_id: int) -> None:
+        self._x("UPDATE events SET has_sample = 1 WHERE id = ?", (event_id,))
+
+    def set_verdict(self, event_id: int, verdict: str | None, user: str, note: str = "") -> None:
+        """Đánh giá cảnh báo. Đã đánh giá thì coi như đã xử lý; bỏ đánh giá không mở lại cảnh báo."""
+        if verdict is None:
+            self._x("UPDATE events SET verdict = NULL, verdict_by = NULL, verdict_at = NULL WHERE id = ?", (event_id,))
+            return
+        now = time.time()
+        self._x("UPDATE events SET verdict = ?, verdict_by = ?, verdict_at = ?, status = 'ack', "
+                "ack_by = COALESCE(ack_by, ?), ack_at = COALESCE(ack_at, ?), "
+                "note = CASE WHEN ? = '' THEN note ELSE ? END WHERE id = ?",
+                (verdict, user, now, user, now, note, note, event_id))
+
+    def judged_events(self) -> list[dict]:
+        return self._q("SELECT * FROM events WHERE verdict IS NOT NULL ORDER BY id")
+
     def unacked_count(self) -> int:
         return self._q("SELECT count(*) AS n FROM events WHERE status = 'new'")[0]["n"]
 
@@ -221,6 +254,23 @@ class Database:
             acc[(datetime.fromtimestamp(r["t"], z).strftime("%Y-%m-%d"), r["rule"])] += 1
         return [{"day": d, "rule": rule, "n": n} for (d, rule), n in sorted(acc.items())]
 
+    def verdict_counts(self, camera_id: int | None = None, rule: str | None = None, status: str | None = None,
+                       t0: float | None = None, t1: float | None = None) -> dict:
+        """Số cảnh báo theo phân loại (chưa đánh giá / đúng / báo nhầm) trong phạm vi bộ lọc."""
+        out = {}
+        for key in ("none", "true", "false"):
+            out[key] = self.query_events(camera_id, rule, status, t0, t1, limit=0, verdict=key)[1]
+        return out
+
+    # ---------------------------------------------------------------- tài khoản
+    def add_user_if_missing(self, name: str, salt: str, pw_hash: str, role: str) -> bool:
+        return self._x("INSERT OR IGNORE INTO users (name, salt, hash, role, created) VALUES (?,?,?,?,?)",
+                       (name, salt, pw_hash, role, time.time())) > 0
+
+    def get_user(self, name: str) -> dict | None:
+        rows = self._q("SELECT * FROM users WHERE name=?", (name,))
+        return rows[0] if rows else None
+
     # ---------------------------------------------------------------- nhật ký
     def audit(self, user: str, action: str, detail: str = "") -> None:
         self._x("INSERT INTO audit (t, user, action, detail) VALUES (?,?,?,?)", (time.time(), user, action, detail))
@@ -229,7 +279,8 @@ class Database:
         return self._q("SELECT * FROM audit ORDER BY id DESC LIMIT ? OFFSET ?", (limit, offset))
 
     # ---------------------------------------------------------------- dọn dữ liệu
-    def purge(self, now: float, raw_days: float, clip_days: float, evidence_root: Path) -> dict:
+    def purge(self, now: float, raw_days: float, clip_days: float, evidence_root: Path,
+              samples_root: Path | None = None) -> dict:
         """Xóa số liệu thô quá `raw_days` ngày; xóa file ảnh và clip của cảnh báo quá `clip_days` ngày
         (bản ghi cảnh báo vẫn giữ, đánh dấu `purged`). Thống kê theo phút không bị xóa."""
         n_samples = self._x("DELETE FROM samples WHERE t < ?", (now - raw_days * 86400,))
@@ -240,6 +291,12 @@ class Database:
                 if path is not None and path.exists():
                     path.unlink()
             self._x("UPDATE events SET purged = 1 WHERE id = ?", (e["id"],))
+        if samples_root is not None:
+            # mẫu đã được đánh giá giữ lâu dài để học; mẫu không ai xem thì xóa cùng thời hạn với clip
+            for e in self._q("SELECT id FROM events WHERE t < ? AND has_sample = 1 AND verdict IS NULL",
+                             (now - clip_days * 86400,)):
+                shutil.rmtree(samples_root / str(e["id"]), ignore_errors=True)
+                self._x("UPDATE events SET has_sample = 0 WHERE id = ?", (e["id"],))
         return {"samples": n_samples, "clips": len(old)}
 
 

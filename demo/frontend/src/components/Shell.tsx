@@ -2,12 +2,13 @@ import type { ReactNode } from 'react'
 import type { Me } from '../types'
 import { Icon, type IconName } from './Icon'
 
-export type Route = 'monitor' | 'history' | 'stats' | 'cameras' | 'audit'
+export type Route = 'monitor' | 'history' | 'stats' | 'labeling' | 'cameras' | 'audit'
 
 export const ROUTES: { id: Route; hash: string; label: string; icon: IconName; admin?: boolean }[] = [
   { id: 'monitor', hash: '#/giam-sat', label: 'Giám sát', icon: 'eye' },
   { id: 'history', hash: '#/lich-su', label: 'Lịch sử cảnh báo', icon: 'alert' },
   { id: 'stats', hash: '#/thong-ke', label: 'Thống kê', icon: 'chart' },
+  { id: 'labeling', hash: '#/gan-nhan', label: 'Gắn nhãn', icon: 'edit', admin: true },
   { id: 'cameras', hash: '#/camera', label: 'Camera', icon: 'video', admin: true },
   { id: 'audit', hash: '#/nhat-ky', label: 'Nhật ký', icon: 'list', admin: true },
 ]
@@ -56,12 +57,6 @@ export function Shell({ me, route, unacked, connected, running, maxCameras, onLo
           <button className="btn btn-ghost btn-sm" onClick={onLogout}><Icon name="logout" size={14} /> Đăng xuất</button>
         </div>
       </header>
-      {me.default_credentials && (
-        <div className="banner" role="alert">
-          <Icon name="alert" size={14} /> Đang dùng tài khoản mặc định admin/admin. Hãy đặt CROWD_ADMIN_USER và CROWD_ADMIN_PASSWORD
-          trong demo/backend/.env rồi khởi động lại.
-        </div>
-      )}
       {children}
     </div>
   )

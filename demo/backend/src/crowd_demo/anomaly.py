@@ -10,7 +10,8 @@ chuẩn hóa gốc của autoencoder.
 
 Các mô hình:
 - `speed`: ngưỡng tốc độ (mốc B0).
-- `if_*`: Isolation Forest, học tại chỗ trên camera trong lúc "học mức bình thường".
+- `if_flow_mask_density`: Isolation Forest (chuyển động trong mask + mật độ), học tại chỗ trên camera trong lúc
+  "học mức bình thường". Đây là biến thể tốt nhất trong nghiên cứu; hai biến thể thiếu mask hoặc mật độ không đưa vào.
 - `ae_scene*`: autoencoder đã train trên từng bối cảnh UMN (file trong `models/anomaly/`).
   Chuẩn hóa theo thống kê camera (mặc định) hoặc thống kê gốc của UMN.
 
@@ -38,8 +39,6 @@ SMOOTH_N = 3             # làm mượt điểm: trung bình 3 mẫu gần nhấ
 # tên → (nhãn, loại, AUC trung bình 3 bối cảnh trên UMN trong báo cáo)
 ANOMALY_MODELS: dict[str, tuple[str, str, float]] = {
     "speed": ("Ngưỡng tốc độ (B0)", "speed", 0.839),
-    "if_flow": ("Isolation Forest · flow", "if", 0.891),
-    "if_flow_mask": ("Isolation Forest · flow + mask", "if", 0.891),
     "if_flow_mask_density": ("Isolation Forest · flow + mask + mật độ", "if", 0.975),
     "ae_scene1": ("Autoencoder · UMN bãi cỏ", "ae", 0.989),
     "ae_scene2": ("Autoencoder · UMN trong nhà", "ae", 0.890),
@@ -160,11 +159,9 @@ class IFDetector:
     """Isolation Forest trên véc-tơ khung (trung bình, max, độ lệch chuẩn qua 64 ô)."""
     limit: float | None = None
 
-    def __init__(self, channels: str):
-        self.channels = channels
-
-    def _grid(self, f: CellFeats) -> np.ndarray:
-        return {"flow": f.f0, "flow_mask": f.fm, "flow_mask_density": np.concatenate([f.fm, f.d], -1)}[self.channels]
+    @staticmethod
+    def _grid(f: CellFeats) -> np.ndarray:
+        return np.concatenate([f.fm, f.d], -1)
 
     def fit(self, samples: list[CellFeats]) -> None:
         X = frame_vectors(np.stack([self._grid(f) for f in samples]))
@@ -247,7 +244,7 @@ def make_detector(name: str, models_dir: Path | None = None, weights: Path | Non
     if kind == "speed":
         return SpeedDetector()
     if kind == "if":
-        return IFDetector(name.removeprefix("if_"))
+        return IFDetector()
     scene = name.removeprefix("ae_")
     base = (models_dir or Path(".")) / "anomaly"
     weights = weights or base / f"ae_umn_{scene}.pth"

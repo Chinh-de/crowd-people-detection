@@ -15,10 +15,15 @@ DEFAULT_TZ = "Europe/Dublin"
 MODELS = {
     "mask": ("MobileCount + Mask", "mask.pth"),
     "baseline": ("MobileCount (baseline)", "baseline.pth"),
+    "mask_dublin": ("MobileCount + Mask · tinh chỉnh Dublin", "mask_dublin.pth"),
 }
 DEFAULT_MODEL = "mask"
-# Kết quả nghiên cứu giai đoạn 1 (MAE, MSE trên tập test ShanghaiTech Part B), hiển thị trên web để so sánh
-MODEL_METRICS = {"mask": (8.49, 13.77), "baseline": (9.30, 15.47)}
+# Kết quả nghiên cứu giai đoạn 1 (MAE, MSE trên tập test ShanghaiTech Part B; bản Dublin: MAE 5,15 trên test Temple Bar, trước tinh chỉnh 12,58), hiển thị trên web để so sánh
+MODEL_METRICS = {"mask": (8.49, 13.77), "baseline": (9.30, 15.47),
+                 "mask_dublin": (10.03, 16.78)}
+
+# MAE trên tập test Temple Bar (80 ảnh ngày 18–19/11); chỉ có số cho bản đã tinh chỉnh
+MODEL_MAE_DUBLIN = {"mask_dublin": 5.15}
 
 
 @dataclass
@@ -32,6 +37,7 @@ class Settings:
     ring_seconds: float = 6.0      # bộ đệm frame cho clip bằng chứng
     clip_pre_s: float = 5.0
     clip_post_s: float = 5.0
+    stream_fps: float = 10.0       # FPS luồng hiển thị: mức máy CPU giữ đều được khi model chạy song song
     stream_width: int = 960        # chiều rộng luồng MJPEG gửi lên web
     jpeg_quality: int = 80
     calib_seconds: float = 300.0   # thời gian học mức bình thường mặc định (5 phút)
@@ -58,6 +64,14 @@ class Settings:
     @property
     def db_path(self) -> Path:
         return self.data_dir / "crowd.db"
+
+    @property
+    def labels_dir(self) -> Path:
+        return self.data_dir / "labels" / "dublin_live"
+
+    @property
+    def samples_dir(self) -> Path:
+        return self.data_dir / "samples"
 
     @property
     def evidence_dir(self) -> Path:

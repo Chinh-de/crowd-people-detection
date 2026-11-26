@@ -4,11 +4,11 @@ import { num } from '../format'
 import type { AnomalyModels, CountModelInfo, Status } from '../types'
 import { Icon } from './Icon'
 
-const KIND_LABEL = { speed: 'Mốc so sánh', if: 'Isolation Forest · học tại chỗ', ae: 'Autoencoder · đã train trên UMN' }
+const KIND_LABEL = { speed: 'Mốc so sánh', if: 'Isolation Forest · học tại chỗ (mặc định)', ae: 'Autoencoder · đã train trên UMN' }
 
 /**
  * Mô hình của camera đang xem, theo hai giai đoạn của đề tài.
- * Giai đoạn 1 đếm người (MAE/MSE trên ShanghaiTech B); giai đoạn 2 phát hiện bất thường (AUC trên UMN).
+ * Giai đoạn 1 đếm người; giai đoạn 2 phát hiện bất thường.
  */
 export function PipelineCard({ status, canEdit }: { status: Status; canEdit: boolean }) {
   const [counters, setCounters] = useState<CountModelInfo[]>([])
@@ -37,6 +37,8 @@ export function PipelineCard({ status, canEdit }: { status: Status; canEdit: boo
 
   const a = status.anomaly
   const locked = busy || !canEdit
+  const counter = counters.find((m) => m.name === status.model)
+  const detector = anomaly?.models.find((m) => m.name === a.model)
   const groups = (['speed', 'if', 'ae'] as const).map((k) => [k, anomaly?.models.filter((m) => m.kind === k) ?? []] as const)
 
   return (
@@ -47,45 +49,42 @@ export function PipelineCard({ status, canEdit }: { status: Status; canEdit: boo
       </header>
 
       <div className="stage-block">
-        <div className="stage-title"><span className="stage-no">1</span> Đếm người <span className="muted">MAE / MSE · ShanghaiTech B</span></div>
-        <div className="options" role="radiogroup" aria-label="Mô hình đếm người">
-          {counters.map((m) => {
-            const on = status.model === m.name
-            return (
-              <button key={m.name} role="radio" aria-checked={on} disabled={locked || !m.available || on}
-                className={`option ${on ? 'on' : ''}`} onClick={() => act(() => api.setModel(cid, m.name))}>
-                <span className="option-label">{m.label}</span>
-                <span className="option-metric mono">{num(m.mae, 2)} / {num(m.mse, 2)}</span>
-                {!m.available && <span className="muted small">thiếu file</span>}
-              </button>
-            )
-          })}
-        </div>
+        <label className="field">
+          <span className="stage-title"><span className="stage-no">1</span> Đếm người</span>
+          <select value={status.model} disabled={locked} onChange={(e) => act(() => api.setModel(cid, e.target.value))}>
+            {counters.map((m) => (
+              <option key={m.name} value={m.name} disabled={!m.available}>{m.label}{m.available ? '' : ' (thiếu file)'}</option>
+            ))}
+          </select>
+        </label>
+        {counter && (
+          <dl className="metrics">
+            <dt>ShanghaiTech B · MAE / MSE</dt><dd className="mono">{num(counter.mae, 2)} / {num(counter.mse, 2)}</dd>
+            <dt>Camera Dublin · MAE</dt><dd className="mono">{counter.mae_dublin == null ? 'chưa đo' : num(counter.mae_dublin, 2)}</dd>
+          </dl>
+        )}
+        <p className="note">MAE càng thấp càng tốt. Bản tinh chỉnh Dublin đếm tốt hơn trên camera Temple Bar,
+          đổi lại kém hơn một chút trên ShanghaiTech.</p>
       </div>
 
       <div className="stage-block">
-        <div className="stage-title"><span className="stage-no">2</span> Phát hiện bất thường <span className="muted">AUC · UMN</span></div>
-        {groups.map(([kind, list]) => list.length > 0 && (
-          <div key={kind} className="option-group">
-            <div className="group-label">{KIND_LABEL[kind]}</div>
-            <div className="options" role="radiogroup" aria-label={KIND_LABEL[kind]}>
-              {list.map((m) => {
-                const on = a.model === m.name
-                return (
-                  <button key={m.name} role="radio" aria-checked={on} disabled={locked || !m.available || on}
-                    className={`option ${on ? 'on' : ''}`} onClick={() => act(() => api.setAnomalyModel(cid, m.name))}>
-                    <span className="option-label">{m.label}</span>
-                    <span className="auc" aria-label={`AUC ${num(m.umn_auc, 3)}`}>
-                      <span className="auc-bar"><span style={{ width: `${Math.max(0, (m.umn_auc - 0.8) / 0.2) * 100}%` }} /></span>
-                      <span className="mono">{num(m.umn_auc, 3)}</span>
-                    </span>
-                    {!m.available && <span className="muted small">thiếu file trọng số</span>}
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-        ))}
+        <label className="field">
+          <span className="stage-title"><span className="stage-no">2</span> Phát hiện bất thường</span>
+          <select value={a.model} disabled={locked} onChange={(e) => act(() => api.setAnomalyModel(cid, e.target.value))}>
+            {groups.map(([kind, list]) => list.length > 0 && (
+              <optgroup key={kind} label={KIND_LABEL[kind]}>
+                {list.map((m) => (
+                  <option key={m.name} value={m.name} disabled={!m.available}>{m.label}{m.available ? '' : ' (thiếu file)'}</option>
+                ))}
+              </optgroup>
+            ))}
+          </select>
+        </label>
+        {detector && (
+          <dl className="metrics">
+            <dt>UMN · AUC (càng cao càng tốt)</dt><dd className="mono">{num(detector.umn_auc, 3)}</dd>
+          </dl>
+        )}
         {a.kind === 'ae' && anomaly && (
           <>
             <div className="field-inline">

@@ -1,6 +1,6 @@
 """Đăng nhập cơ bản: tài khoản lấy từ biến môi trường, phiên đăng nhập là cookie ký HMAC.
 
-- CROWD_ADMIN_USER / CROWD_ADMIN_PASSWORD: quản trị (mọi quyền). Thiếu thì dùng admin/admin và báo trong log.
+- CROWD_ADMIN_USER / CROWD_ADMIN_PASSWORD: quản trị (mọi quyền). Thiếu thì dùng admin/admin. Tài khoản được seed vào SQLite (bảng users) khi khởi động.
 - CROWD_VIEWER_USER / CROWD_VIEWER_PASSWORD: chỉ xem (không bắt buộc). Được xác nhận cảnh báo, không sửa cấu hình.
 - CROWD_SECRET: khóa ký phiên. Thiếu thì sinh ngẫu nhiên mỗi lần chạy (khởi động lại phải đăng nhập lại).
 """
@@ -35,7 +35,13 @@ def _unb64(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
 
 
+def _hash(password: str, salt: str) -> str:
+    return hashlib.pbkdf2_hmac("sha256", password.encode(), salt.encode(), 100_000).hex()
+
+
 class Auth:
+    _db = None
+
     def __init__(self, env: Mapping[str, str], ttl_s: float = SESSION_TTL_S):
         admin_user, admin_pw = env.get("CROWD_ADMIN_USER"), env.get("CROWD_ADMIN_PASSWORD")
         self.using_default = not (admin_user and admin_pw)
@@ -46,9 +52,21 @@ class Auth:
         self._secret = (env.get("CROWD_SECRET") or secrets.token_hex(32)).encode()
         self.ttl_s = ttl_s
 
+    def attach(self, db) -> None:
+        """Dùng bảng users trong SQLite làm nguồn tài khoản; seed tài khoản từ .env (hoặc admin/admin) nếu chưa có."""
+        self._db = db
+        for name, (pw, role) in self._users.items():
+            salt = secrets.token_hex(8)
+            db.add_user_if_missing(name, salt, _hash(pw, salt), role)
+
     def check(self, username: str, password: str) -> User | None:
-        entry = self._users.get(username)
         # So sánh thời gian hằng cả khi tên sai, để không lộ tên đăng nhập nào tồn tại
+        if self._db is not None:
+            row = self._db.get_user(username)
+            salt, expected, role = (row["salt"], row["hash"], row["role"]) if row else ("", secrets.token_hex(32), "")
+            ok = hmac.compare_digest(_hash(password, salt), expected)
+            return User(username, role) if row and ok else None
+        entry = self._users.get(username)
         expected = entry[0] if entry else secrets.token_hex(16)
         ok = hmac.compare_digest(password.encode(), expected.encode())
         return User(username, entry[1]) if entry and ok else None

@@ -21,3 +21,6 @@ results/*_visual_partB.png
 improve-mobilecount-tr-n-shanghaitech.ipynb
 improve-shanghai-baseline.ipynb
 shanghaitech-baseline.ipynb
+
+# Dataset đóng gói cho Kaggle (tạo bằng scripts/export_dublin_kaggle.py)
+kaggle/
