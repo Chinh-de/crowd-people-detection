@@ -11,7 +11,7 @@ from dataclasses import asdict, fields
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .anomaly import ANOMALY_MODELS, DEFAULT_ANOMALY, NORM_MODES, available as anomaly_available
+from .anomaly import DEFAULT_ANOMALY, NORM_MODES
 from .config import DEFAULT_MODEL, VIDEO_EXTS, Settings
 from .model import CountModel
 from .pipeline import Pipeline, source_slug
@@ -21,6 +21,8 @@ from .zones import ZoneSet
 log = logging.getLogger(__name__)
 KINDS = ("file", "youtube")
 DEFAULT_LIVE_URL = "https://www.youtube.com/watch?v=3nyPER2kzqk"
+UMN_CAMERAS = (("UMN · bãi cỏ", "umn_bai_co.avi"), ("UMN · trong nhà", "umn_trong_nha.avi"),
+               ("UMN · quảng trường", "umn_quang_truong.avi"))
 
 
 class CameraLimitError(RuntimeError):
@@ -144,10 +146,7 @@ class CameraManager:
                      on_change=lambda key, value: self._persist(cid, key, value))
         p.mode = cfg.get("view_mode", "overlay")
         p.rule_config = rule_config_from(cfg.get("rules"))
-        anomaly = cfg.get("anomaly_model", DEFAULT_ANOMALY)
-        if anomaly not in ANOMALY_MODELS or not anomaly_available(anomaly, self.settings.models_dir):
-            anomaly = DEFAULT_ANOMALY
-        p.anomaly_name = anomaly
+        p.anomaly_name = DEFAULT_ANOMALY                 # web chỉ dùng Isolation Forest
         p.anomaly_norm = cfg.get("anomaly_norm") if cfg.get("anomaly_norm") in NORM_MODES else "camera"
         if cfg.get("zones"):
             p.preset_zones = ZoneSet.from_dict(cfg["zones"])
@@ -188,24 +187,26 @@ class CameraManager:
                 "active_alerts": st["active_alerts"] if st else [],
                 "analysis_fps": st["perf"]["analysis_fps"] if st else None,
                 "model": cam["config"].get("model", DEFAULT_MODEL),
-                "anomaly_model": cam["config"].get("anomaly_model", DEFAULT_ANOMALY),
+                "anomaly_model": DEFAULT_ANOMALY,
             })
         return out
 
     # ---------------------------------------------------------------- dữ liệu mẫu
     def seed_defaults(self) -> None:
-        """Lần chạy đầu (chưa có camera): tạo sẵn livestream Dublin và các video mẫu có trong thư mục video,
-        kèm vùng đã vẽ trước đây cho các nguồn đó (file trong data/zones/)."""
-        if self.db.list_cameras():
-            return
+        """Chạy mỗi lần khởi động. Lần đầu (chưa có camera): tạo sẵn camera Temple Bar. Ba video UMN tách theo bối
+        cảnh luôn được thêm nếu có file mà chưa camera nào dùng. Vùng đã vẽ lấy từ data/zones/."""
         vids = self.settings.videos_dir
-        samples = [("Temple Bar · trực tiếp", "youtube", DEFAULT_LIVE_URL, "Europe/Dublin", False)]
-        if (vids / "part_1794421962_000.webm").exists():
-            samples.append(("Temple Bar · bản ghi", "file", "part_1794421962_000.webm", "Europe/Dublin", False))
-        if (vids / "umn.avi").exists():
-            samples.append(("UMN · hoảng loạn", "file", "umn.avi", "UTC", False))
-        for name, kind, source, tz, auto in samples:
+        cameras = self.db.list_cameras()
+        samples = []
+        if not cameras:
+            samples.append(("Temple Bar · trực tiếp", "youtube", DEFAULT_LIVE_URL, "Europe/Dublin"))
+            if (vids / "part_1794421962_000.webm").exists():
+                samples.append(("Temple Bar · bản ghi", "file", "part_1794421962_000.webm", "Europe/Dublin"))
+        used = {c["source"] for c in cameras}
+        samples += [(name, "file", source, "UTC") for name, source in UMN_CAMERAS
+                    if source not in used and (vids / source).exists()]
+        for name, kind, source, tz in samples:
             spec = {"url": source} if kind == "youtube" else {"path": source}
             zfile = self.settings.zones_dir / f"{source_slug(spec)}.json"
             config = {"zones": json.loads(zfile.read_text(encoding="utf-8"))} if zfile.exists() else {}
-            self.db.create_camera(name, kind, source, tz, auto, config)
+            self.db.create_camera(name, kind, source, tz, False, config)

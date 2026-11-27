@@ -272,6 +272,7 @@ class AnomalyMonitor:
         self._samples: list[CellFeats] = []
         self._need = 0
         self.learning = False
+        self.preset: str | None = None       # tên mốc học sẵn đang dùng; None = mốc học từ nguồn đang chạy
         self.last: Reading | None = None
         self._recent: deque[float] = deque(maxlen=SMOOTH_N)
 
@@ -282,7 +283,15 @@ class AnomalyMonitor:
     def progress(self) -> tuple[int, int]:
         return len(self._samples), self._need
 
+    def preload(self, name: str, samples: list[CellFeats]) -> None:
+        """Dùng mốc bình thường học sẵn: chấm điểm được ngay."""
+        self.preset, self._samples, self._need, self.learning = name, list(samples), len(samples), False
+        self._recent.clear()
+        self.last = None
+        self.detector.fit(self._samples)
+
     def start_calibration(self, n_samples: int) -> None:
+        self.preset = None
         self._samples, self._need, self.learning = [], max(MIN_SAMPLES, n_samples), True
         self._recent.clear()
         self.detector.limit, self.last = None, None

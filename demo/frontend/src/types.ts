@@ -44,6 +44,7 @@ export interface AnomalyStatus {
   norm: 'camera' | 'umn'
   ready: boolean
   learning: boolean
+  preset: string | null
   have: number
   need: number
   score: number | null

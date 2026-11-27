@@ -24,6 +24,7 @@ from .domain import DensityStats, MotionStats
 from .evidence import EvidenceRecorder, FrameRing
 from .model import STRIDE, CountModel, infer
 from .motion import compute_flow, flow_features, wrong_way
+from .presets import load_preset
 from .overlay import Layers, render
 from .rules import RuleConfig, RuleEngine
 from .samples import save_sample
@@ -121,6 +122,7 @@ class Pipeline:
         self.zones = self.preset_zones if self.preset_zones is not None else self._load_zones()
         self.engine = RuleEngine(self.rule_config)
         self.monitor = AnomalyMonitor(self.anomaly_name, self.settings.models_dir, self.anomaly_norm)
+        self._use_preset()
         self.state = "running"
         self._stop.clear()
         self._threads = [threading.Thread(target=self._read_loop, name="crowd-reader", daemon=True),
@@ -147,7 +149,18 @@ class Pipeline:
         self._changed("model", name)
         if self.state == "running":
             self.engine = RuleEngine(self.rule_config)
-            self.calibrate(self.settings.calib_seconds)
+            if not self._use_preset():
+                self.calibrate(self.settings.calib_seconds)
+
+    def _use_preset(self) -> bool:
+        """Nạp mốc học sẵn hợp với nguồn và mô hình đếm đang dùng; chưa tạo mốc thì trả False (tự học như thường)."""
+        spec = self.spec or {}
+        source = spec.get("url") or (Path(spec["path"]).name if spec.get("path") else None)
+        found = load_preset(self.settings.models_dir, self.model_name, source)
+        if found is None:
+            return False
+        self.monitor.preload(*found)
+        return True
 
     def set_anomaly(self, name: str, norm: str | None = None) -> None:
         """Đổi mô hình giai đoạn 2. Mô hình mới học lại ngay từ các mẫu bình thường đã thu, không cần chờ."""
@@ -251,7 +264,7 @@ class Pipeline:
                      "delay_ms": round(self.sync.delay * 1000)},
             "calibration": {"done": mon.ready, "have": a_have, "need": a_need},
             "anomaly": {"model": mon.name, "label": label, "kind": kind, "umn_auc": auc, "norm": mon.norm_mode,
-                        "ready": mon.ready, "learning": mon.learning, "have": a_have, "need": a_need,
+                        "ready": mon.ready, "learning": mon.learning, "preset": mon.preset, "have": a_have, "need": a_need,
                         "score": None if last is None else last.score, "limit": None if last is None else last.limit},
             "zones": [{"name": z.name, "count": z.count, "limit": z.limit, "direction": z.direction,
                        "wrong_share": z.wrong_share} for z in d.zones],
