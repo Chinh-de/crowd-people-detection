@@ -158,6 +158,8 @@ class SpeedDetector:
 class IFDetector:
     """Isolation Forest trên véc-tơ khung (trung bình, max, độ lệch chuẩn qua 64 ô)."""
     limit: float | None = None
+    k = 3.0                      # ngưỡng = trung vị + k·σ; càng lớn càng ít báo
+    floor = 0.0                  # ngưỡng không thấp hơn mức này
 
     @staticmethod
     def _grid(f: CellFeats) -> np.ndarray:
@@ -169,7 +171,8 @@ class IFDetector:
         self.iso = IsolationForest(n_estimators=200, random_state=0).fit((X - self.mu) / self.sd)
         # Điểm IF bị chặn trên: khung nằm ngoài vùng dữ liệu train chỉ nhận điểm ngang các khung train ở rìa,
         # nên ngưỡng không dùng phân vị 99% của chính dữ liệu train (gần như không bao giờ vượt được).
-        self.limit = _limit(-self.iso.score_samples((X - self.mu) / self.sd), k=3.0, quantile=None)
+        self.limit = _limit(-self.iso.score_samples((X - self.mu) / self.sd), k=self.k, quantile=None)
+        self.limit = max(self.limit, self.floor)
 
     def score(self, f: CellFeats) -> tuple[float, None]:
         x = (frame_vectors(self._grid(f)[None]) - self.mu) / self.sd
@@ -269,6 +272,11 @@ class AnomalyMonitor:
         self.models_dir, self.norm_mode = models_dir, norm_mode
         self.name = name
         self.detector = make_detector(name, models_dir, norm_mode=norm_mode)
+        self.k: float | None = None          # hệ số ngưỡng riêng của nguồn; None = mặc định của mô hình
+        self.floor = 0.0
+        self.initial = False                 # mốc nạp sẵn chỉ là khởi đầu, ngưỡng được cập nhật định kỳ
+        self._window: deque[CellFeats] | None = None      # mẫu gần nhất của nguồn đang chạy
+        self._every = self._since = 0
         self._samples: list[CellFeats] = []
         self._need = 0
         self.learning = False
@@ -283,15 +291,29 @@ class AnomalyMonitor:
     def progress(self) -> tuple[int, int]:
         return len(self._samples), self._need
 
-    def preload(self, name: str, samples: list[CellFeats]) -> None:
-        """Dùng mốc bình thường học sẵn: chấm điểm được ngay."""
+    def _set_k(self) -> None:
+        if self.k is not None:
+            self.detector.k = self.k
+        self.detector.floor = self.floor
+
+    def preload(self, name: str, samples: list[CellFeats], initial: bool = False, k: float | None = None,
+                floor: float = 0.0) -> None:
+        """Dùng mốc bình thường học sẵn: chấm điểm được ngay. `initial`: chỉ là ngưỡng khởi đầu, sau đó cập nhật định kỳ."""
+        self.initial, self.k, self.floor, self._window = initial, k, floor, None
+        self._set_k()
         self.preset, self._samples, self._need, self.learning = name, list(samples), len(samples), False
         self._recent.clear()
         self.last = None
         self.detector.fit(self._samples)
 
+    def start_rolling(self, window: int, every: int) -> None:
+        """Cập nhật ngưỡng định kỳ: cứ `every` mẫu thì học lại trên tối đa `window` mẫu gần nhất của nguồn đang chạy.
+        Trước lần đầu vẫn chấm bằng mốc nạp sẵn với ngưỡng sàn; từ lần đầu bỏ cả mốc đó lẫn ngưỡng sàn."""
+        self._every, self._since = max(MIN_SAMPLES, every), 0
+        self._window = deque(maxlen=max(window, self._every))
+
     def start_calibration(self, n_samples: int) -> None:
-        self.preset = None
+        self.preset, self.initial, self._window = None, False, None
         self._samples, self._need, self.learning = [], max(MIN_SAMPLES, n_samples), True
         self._recent.clear()
         self.detector.limit, self.last = None, None
@@ -299,6 +321,7 @@ class AnomalyMonitor:
     def select(self, name: str, norm_mode: str | None = None) -> None:
         detector = make_detector(name, self.models_dir, norm_mode=norm_mode or self.norm_mode)
         self.name, self.detector = name, detector
+        self._set_k()
         self.norm_mode = norm_mode or self.norm_mode
         self.last = None
         self._recent.clear()
@@ -314,6 +337,14 @@ class AnomalyMonitor:
             return None
         if not self.ready:
             return None
+        if self._window is not None:
+            self._window.append(f)
+            self._since += 1
+            if self._since >= self._every:
+                self._since, self.preset = 0, None
+                self._samples = list(self._window)
+                self.floor = self.detector.floor = 0.0
+                self.detector.fit(self._samples)
         score, cells = self.detector.score(f)
         self._recent.append(score)
         self.last = Reading(float(np.mean(self._recent)), float(self.detector.limit), cells)

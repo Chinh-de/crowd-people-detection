@@ -24,7 +24,7 @@ from .domain import DensityStats, MotionStats
 from .evidence import EvidenceRecorder, FrameRing
 from .model import STRIDE, CountModel, infer
 from .motion import compute_flow, flow_features, wrong_way
-from .presets import load_preset
+from .presets import DUBLIN, DUBLIN_LIVE_ID, load_preset
 from .overlay import Layers, render
 from .rules import RuleConfig, RuleEngine
 from .samples import save_sample
@@ -34,6 +34,11 @@ from .sync import OverlaySync
 from .zones import ZoneSet
 
 SAMPLE_FEATS = 32        # số lần phân tích gần nhất lưu kèm mỗi cảnh báo (đủ cửa sổ 16 mẫu của autoencoder)
+LIVE_K = 5.0             # Temple Bar/livestream: ngưỡng trung vị + 5σ (k=3 báo quá nhiều)
+UPDATE_S = 60.0          # Temple Bar/livestream: cập nhật ngưỡng sau mỗi ngần này giây
+LIVE_START_LIMIT = 0.75  # Temple Bar/livestream: ngưỡng trong lúc đầu, trước khi học được từ nguồn đang chạy
+LIVE_GRACE_S = 10.0      # chưa cảnh báo bất thường trong mấy giây đầu
+LIVE_MIN_PEOPLE = 3.0    # gần như không có người thì không cảnh báo (mốc luôn có người nên cảnh trống bị chấm điểm cao)
 AUTO_CALIB_AFTER = 5     # tự học mức bình thường sau ngần này lần phân tích (để đo được tốc độ phân tích)
 MAX_UPSCALE = 2.0        # không phóng frame quá 2 lần: video nhỏ (UMN 320×240) phóng lên 960 làm đầu người quá to,
                          # mô hình đếm gần như bằng 0 (đo trên UMN: 960 px → 0,2 người; 640 px → 5,5 người)
@@ -151,15 +156,21 @@ class Pipeline:
             self.engine = RuleEngine(self.rule_config)
             if not self._use_preset():
                 self.calibrate(self.settings.calib_seconds)
+            elif self.monitor.initial:
+                self._start_rolling()
 
     def _use_preset(self) -> bool:
         """Nạp mốc học sẵn hợp với nguồn và mô hình đếm đang dùng; chưa tạo mốc thì trả False (tự học như thường)."""
         spec = self.spec or {}
         source = spec.get("url") or (Path(spec["path"]).name if spec.get("path") else None)
+        if spec.get("kind") == "youtube":
+            source = DUBLIN_LIVE_ID                  # mọi livestream khởi đầu bằng mốc Temple Bar
         found = load_preset(self.settings.models_dir, self.model_name, source)
         if found is None:
             return False
-        self.monitor.preload(*found)
+        live = found[0] == DUBLIN                    # camera thật: mốc chỉ là ngưỡng khởi đầu, ngưỡng nới rộng hơn
+        self.monitor.preload(*found, initial=live, k=LIVE_K if live else None,
+                             floor=LIVE_START_LIMIT if live else 0.0)
         return True
 
     def set_anomaly(self, name: str, norm: str | None = None) -> None:
@@ -211,8 +222,13 @@ class Pipeline:
             self.on_change(key, value)
 
     def calibrate(self, seconds: float) -> None:
-        rate = max(self._analysis_rate.value, 0.5)
-        self.monitor.start_calibration(int(round(seconds * rate)))
+        self.monitor.start_calibration(self._calib_samples(seconds))
+
+    def _start_rolling(self) -> None:
+        self.monitor.start_rolling(self._calib_samples(self.settings.calib_seconds), self._calib_samples(UPDATE_S))
+
+    def _calib_samples(self, seconds: float) -> int:
+        return int(round(seconds * max(self._analysis_rate.value, 0.5)))
 
     def playback(self, action: str, value: float | None = None) -> None:
         if not isinstance(self.source, FileSource):
@@ -311,7 +327,7 @@ class Pipeline:
     # ---------- luồng phân tích ----------
     def _analyze_loop(self) -> None:
         s = self.settings
-        last_t, n_done, heat_vmax = None, 0, 0.05
+        last_t, n_done, heat_vmax, first_t = None, 0, 0.05, None
         while not self._stop.is_set():
             with self._lock:
                 latest, zones = self._latest, self.zones
@@ -334,7 +350,9 @@ class Pipeline:
 
             wrong = None if flow is None else self._check_directions(d, zones, flow, valid)
 
-            alerts = self.engine.update(last_t, d, m, reading)
+            first_t = last_t if first_t is None else first_t
+            muted = self.monitor.initial and (last_t - first_t < LIVE_GRACE_S or d.roi < LIVE_MIN_PEOPLE)
+            alerts = self.engine.update(last_t, d, m, None if muted else reading)
             q = float(np.quantile(res.density, 0.999)) if res.density.size else 0.0
             heat_vmax = 0.9 * heat_vmax + 0.1 * max(q, 0.01)
             layers = Layers(density=res.density, mask=res.mask, flow=flow, flow_valid=valid, zones=zones,
@@ -359,6 +377,8 @@ class Pipeline:
             n_done += 1
             if n_done == AUTO_CALIB_AFTER and not self.monitor.ready and not self.monitor.learning:
                 self.calibrate(s.calib_seconds)
+            elif n_done == AUTO_CALIB_AFTER and self.monitor.initial:
+                self._start_rolling()
 
     @staticmethod
     def _check_directions(d: DensityStats, zones: ZoneSet, flow: np.ndarray, valid: np.ndarray) -> np.ndarray | None:
